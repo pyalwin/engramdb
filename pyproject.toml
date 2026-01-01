@@ -1,0 +1,70 @@
+[project]
+name = "engramdb"
+version = "0.1.0"
+description = "Schema-Aware Hybrid Retrieval for Multi-Hop Legal Reasoning"
+requires-python = ">=3.12"
+license = "MIT"
+authors = [
+    { name = "Arun" }
+]
+keywords = ["rag", "retrieval", "graph", "vector", "legal", "nlp"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+dependencies = [
+    "duckdb>=1.4.3",
+    "openai>=2.11.0",
+    "numpy>=2.3.5",
+    "datasets>=4.4.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=9.0.2",
+    "pytest-cov>=7.0.0",
+    "ruff>=0.14.9",
+    "mypy>=1.19.0",
+]
+local = [
+    "sentence-transformers>=5.2.0",
+]
+benchmark = [
+    "chromadb>=1.3.6",
+    "langchain>=1.1.3",
+    "pandas>=2.3.3",
+    "matplotlib>=3.10.8",
+    "seaborn>=0.13.2",
+]
+
+[project.urls]
+Repository = "https://github.com/pyalwin/engramdb"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/engramdb"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W"]
+
+[tool.mypy]
+python_version = "3.12"
+warn_return_any = true
+warn_unused_configs = true

@@ -1,0 +1,437 @@
+"""
+Benchmark Evaluation for EngramDB
+
+Compares hybrid retrieval (vector + graph) vs vector-only retrieval
+on multi-hop QA tasks from CUAD contracts.
+
+Metrics:
+- Retrieval Recall: % of required sections retrieved
+- Hop Coverage: % of reasoning chain covered
+- Context Relevance: How much of retrieved context is useful
+"""
+
+import json
+import time
+from pathlib import Path
+from dataclasses import dataclass, field, asdict
+from typing import Optional
+import sys
+
+# Add parent to path for imports
+sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
+
+from engramdb import EngramDB
+from engramdb.embeddings.embedder import MockEmbedder, create_embedder
+
+
+@dataclass
+class RetrievalMetrics:
+    """Metrics for a single retrieval."""
+    question_id: str
+    question_type: str
+    hop_count: int
+    required_sections: list[str]
+
+    # Hybrid retrieval results
+    hybrid_retrieved: list[str]
+    hybrid_recall: float
+    hybrid_hop_coverage: float
+    hybrid_time_ms: float
+
+    # Vector-only results
+    vector_retrieved: list[str]
+    vector_recall: float
+    vector_hop_coverage: float
+    vector_time_ms: float
+
+    # Comparison
+    hybrid_advantage: float  # hybrid_recall - vector_recall
+
+
+@dataclass
+class BenchmarkResults:
+    """Aggregate benchmark results."""
+    total_questions: int
+    total_contracts: int
+
+    # Aggregate metrics
+    avg_hybrid_recall: float
+    avg_vector_recall: float
+    avg_hybrid_hop_coverage: float
+    avg_vector_hop_coverage: float
+
+    # By question type
+    metrics_by_type: dict
+
+    # By hop count
+    metrics_by_hops: dict
+
+    # Timing
+    avg_hybrid_time_ms: float
+    avg_vector_time_ms: float
+
+    # Individual results
+    per_question_metrics: list[RetrievalMetrics]
+
+    def to_dict(self) -> dict:
+        return {
+            "summary": {
+                "total_questions": self.total_questions,
+                "total_contracts": self.total_contracts,
+                "avg_hybrid_recall": self.avg_hybrid_recall,
+                "avg_vector_recall": self.avg_vector_recall,
+                "avg_hybrid_hop_coverage": self.avg_hybrid_hop_coverage,
+                "avg_vector_hop_coverage": self.avg_vector_hop_coverage,
+                "avg_hybrid_time_ms": self.avg_hybrid_time_ms,
+                "avg_vector_time_ms": self.avg_vector_time_ms,
+                "hybrid_improvement": self.avg_hybrid_recall - self.avg_vector_recall,
+            },
+            "by_question_type": self.metrics_by_type,
+            "by_hop_count": self.metrics_by_hops,
+            "per_question": [asdict(m) for m in self.per_question_metrics],
+        }
+
+    def save(self, filepath: Path):
+        filepath = Path(filepath)
+        filepath.parent.mkdir(parents=True, exist_ok=True)
+        with open(filepath, "w") as f:
+            json.dump(self.to_dict(), f, indent=2)
+        print(f"Saved benchmark results to {filepath}")
+
+
+class Benchmark:
+    """
+    Benchmark runner for EngramDB vs vector-only retrieval.
+    """
+
+    def __init__(
+        self,
+        embedding_backend: str = "mock",
+        top_k_anchors: int = 3,
+        max_hops: int = 2,
+        max_context_items: int = 10
+    ):
+        """
+        Initialize benchmark.
+
+        Args:
+            embedding_backend: "mock", "openai", or "local"
+            top_k_anchors: Number of vector search anchors for hybrid
+            max_hops: Graph traversal depth
+            max_context_items: Max items to retrieve
+        """
+        self.embedding_backend = embedding_backend
+        self.top_k_anchors = top_k_anchors
+        self.max_hops = max_hops
+        self.max_context_items = max_context_items
+
+    def load_dataset(self, filepath: Path) -> dict:
+        """Load multi-hop QA dataset."""
+        with open(filepath) as f:
+            return json.load(f)
+
+    def run(self, dataset_path: Path) -> BenchmarkResults:
+        """
+        Run the full benchmark.
+
+        Args:
+            dataset_path: Path to multi-hop QA dataset JSON
+
+        Returns:
+            BenchmarkResults with all metrics
+        """
+        print("=" * 60)
+        print("EngramDB Benchmark")
+        print("=" * 60)
+        print(f"Embedding backend: {self.embedding_backend}")
+        print(f"Top-K anchors: {self.top_k_anchors}")
+        print(f"Max hops: {self.max_hops}")
+        print()
+
+        # Load dataset
+        dataset = self.load_dataset(dataset_path)
+        contracts = dataset["contracts"]
+        questions = dataset["questions"]
+
+        print(f"Loaded {len(contracts)} contracts, {len(questions)} questions")
+
+        # Group questions by contract
+        questions_by_contract = {}
+        for q in questions:
+            cid = q["contract_id"]
+            if cid not in questions_by_contract:
+                questions_by_contract[cid] = []
+            questions_by_contract[cid].append(q)
+
+        all_metrics = []
+
+        # Process each contract
+        for i, contract in enumerate(contracts):
+            contract_id = contract["id"]
+            contract_questions = questions_by_contract.get(contract_id, [])
+
+            if not contract_questions:
+                continue
+
+            print(f"\n[{i+1}/{len(contracts)}] {contract_id[:50]}...")
+            print(f"  Questions: {len(contract_questions)}")
+
+            # Create EngramDB instance for this contract
+            with EngramDB(embedding_backend=self.embedding_backend) as db:
+                # Ingest contract
+                print(f"  Ingesting...")
+                db.ingest(contract["text"], doc_id=contract_id)
+
+                # Run queries for each question
+                for q in contract_questions:
+                    metrics = self._evaluate_question(db, q)
+                    all_metrics.append(metrics)
+
+                    # Print progress
+                    print(f"    Q[{q['question_type']}]: hybrid={metrics.hybrid_recall:.0%} vector={metrics.vector_recall:.0%}")
+
+        # Aggregate results
+        results = self._aggregate_results(all_metrics, len(contracts))
+
+        return results
+
+    def _evaluate_question(self, db: EngramDB, question: dict) -> RetrievalMetrics:
+        """Evaluate a single question with both retrieval methods."""
+        query = question["question"]
+        required_sections = question["reasoning_chain"]
+
+        # Hybrid retrieval
+        start = time.time()
+        hybrid_result = db.query(
+            query,
+            top_k_anchors=self.top_k_anchors,
+            max_hops=self.max_hops,
+            max_context_items=self.max_context_items
+        )
+        hybrid_time = (time.time() - start) * 1000
+
+        # Extract section IDs from retrieved engrams
+        hybrid_sections = self._extract_sections(hybrid_result.engrams)
+
+        # Vector-only retrieval
+        start = time.time()
+        vector_result = db.query_vector_only(
+            query,
+            top_k=self.max_context_items
+        )
+        vector_time = (time.time() - start) * 1000
+
+        vector_sections = self._extract_sections(vector_result.engrams)
+
+        # Calculate metrics
+        hybrid_recall = self._calculate_recall(required_sections, hybrid_sections)
+        vector_recall = self._calculate_recall(required_sections, vector_sections)
+
+        hybrid_hop_coverage = self._calculate_hop_coverage(required_sections, hybrid_sections)
+        vector_hop_coverage = self._calculate_hop_coverage(required_sections, vector_sections)
+
+        return RetrievalMetrics(
+            question_id=question["id"],
+            question_type=question["question_type"],
+            hop_count=question["hop_count"],
+            required_sections=required_sections,
+            hybrid_retrieved=hybrid_sections,
+            hybrid_recall=hybrid_recall,
+            hybrid_hop_coverage=hybrid_hop_coverage,
+            hybrid_time_ms=hybrid_time,
+            vector_retrieved=vector_sections,
+            vector_recall=vector_recall,
+            vector_hop_coverage=vector_hop_coverage,
+            vector_time_ms=vector_time,
+            hybrid_advantage=hybrid_recall - vector_recall,
+        )
+
+    def _extract_sections(self, engrams) -> list[str]:
+        """Extract section identifiers from engrams."""
+        sections = []
+        for e in engrams:
+            # Try to get section number from metadata
+            if e.metadata.get("section_number"):
+                sections.append(e.metadata["section_number"])
+            elif e.metadata.get("title"):
+                sections.append(e.metadata["title"])
+            # Also check content for section references
+            content = e.content[:200].lower()
+            # Extract any section numbers mentioned
+            import re
+            for match in re.finditer(r'section\s+(\d+(?:\.\d+)*)', content):
+                sections.append(match.group(1))
+        return list(set(sections))
+
+    def _calculate_recall(self, required: list[str], retrieved: list[str]) -> float:
+        """Calculate retrieval recall."""
+        if not required:
+            return 1.0
+
+        # Normalize for comparison
+        required_norm = set(str(s).lower() for s in required)
+        retrieved_norm = set(str(s).lower() for s in retrieved)
+
+        # Count matches
+        matches = len(required_norm & retrieved_norm)
+
+        return matches / len(required_norm)
+
+    def _calculate_hop_coverage(self, chain: list[str], retrieved: list[str]) -> float:
+        """Calculate what fraction of the reasoning chain is covered."""
+        if not chain:
+            return 1.0
+
+        chain_norm = [str(s).lower() for s in chain]
+        retrieved_norm = set(str(s).lower() for s in retrieved)
+
+        # Check consecutive coverage
+        covered = 0
+        for section in chain_norm:
+            if section in retrieved_norm:
+                covered += 1
+
+        return covered / len(chain_norm)
+
+    def _aggregate_results(
+        self,
+        metrics: list[RetrievalMetrics],
+        num_contracts: int
+    ) -> BenchmarkResults:
+        """Aggregate individual metrics into summary."""
+        if not metrics:
+            return BenchmarkResults(
+                total_questions=0,
+                total_contracts=num_contracts,
+                avg_hybrid_recall=0,
+                avg_vector_recall=0,
+                avg_hybrid_hop_coverage=0,
+                avg_vector_hop_coverage=0,
+                metrics_by_type={},
+                metrics_by_hops={},
+                avg_hybrid_time_ms=0,
+                avg_vector_time_ms=0,
+                per_question_metrics=[],
+            )
+
+        # Overall averages
+        avg_hybrid_recall = sum(m.hybrid_recall for m in metrics) / len(metrics)
+        avg_vector_recall = sum(m.vector_recall for m in metrics) / len(metrics)
+        avg_hybrid_hop = sum(m.hybrid_hop_coverage for m in metrics) / len(metrics)
+        avg_vector_hop = sum(m.vector_hop_coverage for m in metrics) / len(metrics)
+        avg_hybrid_time = sum(m.hybrid_time_ms for m in metrics) / len(metrics)
+        avg_vector_time = sum(m.vector_time_ms for m in metrics) / len(metrics)
+
+        # By question type
+        by_type = {}
+        for m in metrics:
+            qtype = m.question_type
+            if qtype not in by_type:
+                by_type[qtype] = {"hybrid_recall": [], "vector_recall": [], "count": 0}
+            by_type[qtype]["hybrid_recall"].append(m.hybrid_recall)
+            by_type[qtype]["vector_recall"].append(m.vector_recall)
+            by_type[qtype]["count"] += 1
+
+        for qtype in by_type:
+            by_type[qtype]["avg_hybrid_recall"] = sum(by_type[qtype]["hybrid_recall"]) / len(by_type[qtype]["hybrid_recall"])
+            by_type[qtype]["avg_vector_recall"] = sum(by_type[qtype]["vector_recall"]) / len(by_type[qtype]["vector_recall"])
+            by_type[qtype]["improvement"] = by_type[qtype]["avg_hybrid_recall"] - by_type[qtype]["avg_vector_recall"]
+            del by_type[qtype]["hybrid_recall"]
+            del by_type[qtype]["vector_recall"]
+
+        # By hop count
+        by_hops = {}
+        for m in metrics:
+            hops = m.hop_count
+            if hops not in by_hops:
+                by_hops[hops] = {"hybrid_recall": [], "vector_recall": [], "count": 0}
+            by_hops[hops]["hybrid_recall"].append(m.hybrid_recall)
+            by_hops[hops]["vector_recall"].append(m.vector_recall)
+            by_hops[hops]["count"] += 1
+
+        for hops in by_hops:
+            by_hops[hops]["avg_hybrid_recall"] = sum(by_hops[hops]["hybrid_recall"]) / len(by_hops[hops]["hybrid_recall"])
+            by_hops[hops]["avg_vector_recall"] = sum(by_hops[hops]["vector_recall"]) / len(by_hops[hops]["vector_recall"])
+            by_hops[hops]["improvement"] = by_hops[hops]["avg_hybrid_recall"] - by_hops[hops]["avg_vector_recall"]
+            del by_hops[hops]["hybrid_recall"]
+            del by_hops[hops]["vector_recall"]
+
+        return BenchmarkResults(
+            total_questions=len(metrics),
+            total_contracts=num_contracts,
+            avg_hybrid_recall=avg_hybrid_recall,
+            avg_vector_recall=avg_vector_recall,
+            avg_hybrid_hop_coverage=avg_hybrid_hop,
+            avg_vector_hop_coverage=avg_vector_hop,
+            metrics_by_type=by_type,
+            metrics_by_hops={str(k): v for k, v in sorted(by_hops.items())},
+            avg_hybrid_time_ms=avg_hybrid_time,
+            avg_vector_time_ms=avg_vector_time,
+            per_question_metrics=metrics,
+        )
+
+
+def print_results(results: BenchmarkResults):
+    """Print benchmark results in a nice format."""
+    print("\n" + "=" * 60)
+    print("BENCHMARK RESULTS")
+    print("=" * 60)
+
+    print(f"\nContracts: {results.total_contracts}")
+    print(f"Questions: {results.total_questions}")
+
+    print("\n--- Overall Retrieval Recall ---")
+    print(f"  Hybrid (vector + graph): {results.avg_hybrid_recall:.1%}")
+    print(f"  Vector-only:             {results.avg_vector_recall:.1%}")
+    print(f"  Improvement:             {results.avg_hybrid_recall - results.avg_vector_recall:+.1%}")
+
+    print("\n--- Hop Coverage ---")
+    print(f"  Hybrid: {results.avg_hybrid_hop_coverage:.1%}")
+    print(f"  Vector: {results.avg_vector_hop_coverage:.1%}")
+
+    print("\n--- By Question Type ---")
+    for qtype, data in results.metrics_by_type.items():
+        print(f"  {qtype}:")
+        print(f"    Hybrid: {data['avg_hybrid_recall']:.1%}  Vector: {data['avg_vector_recall']:.1%}  Δ: {data['improvement']:+.1%}")
+
+    print("\n--- By Hop Count ---")
+    for hops, data in results.metrics_by_hops.items():
+        print(f"  {hops} hops (n={data['count']}):")
+        print(f"    Hybrid: {data['avg_hybrid_recall']:.1%}  Vector: {data['avg_vector_recall']:.1%}  Δ: {data['improvement']:+.1%}")
+
+    print("\n--- Timing ---")
+    print(f"  Hybrid avg: {results.avg_hybrid_time_ms:.1f}ms")
+    print(f"  Vector avg: {results.avg_vector_time_ms:.1f}ms")
+
+
+def main():
+    """Run the benchmark."""
+    dataset_path = Path("data/cuad/multihop_qa_dataset.json")
+
+    if not dataset_path.exists():
+        print(f"Dataset not found at {dataset_path}")
+        print("Run multihop_generator.py first to create the dataset.")
+        return
+
+    # Run benchmark
+    # Increase anchors so hybrid has more semantic starting points
+    # before graph expansion - fairer comparison to vector-only
+    benchmark = Benchmark(
+        embedding_backend="openai",  # Use OpenAI embeddings for real evaluation
+        top_k_anchors=5,  # More anchors for hybrid
+        max_hops=2,
+        max_context_items=15  # Larger context window
+    )
+
+    results = benchmark.run(dataset_path)
+
+    # Print results
+    print_results(results)
+
+    # Save results
+    output_path = Path("data/cuad/benchmark_results.json")
+    results.save(output_path)
+
+
+if __name__ == "__main__":
+    main()
