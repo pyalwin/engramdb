@@ -121,10 +121,13 @@ class EngramDB:
         # Step 4: Create engrams for sections
         engrams = []
         section_id_map = {}  # section_number -> engram_id
+        section_key_quality = {}  # section key -> body length quality
 
         for section in flat_sections:
+            section_content = self._build_section_content(section)
+            body_quality = len(section.content.strip())
             engram = Engram(
-                content=section.content,
+                content=section_content,
                 engram_type=EngramType.SECTION,
                 metadata={
                     "document_id": doc_id,
@@ -137,11 +140,16 @@ class EngramDB:
 
             # Map section identifiers to engram IDs
             if section.number:
-                section_id_map[section.number] = engram.id
+                if body_quality >= section_key_quality.get(section.number, -1):
+                    section_id_map[section.number] = engram.id
+                    section_key_quality[section.number] = body_quality
             if section.title:
-                section_id_map[section.title] = engram.id
+                if body_quality >= section_key_quality.get(section.title, -1):
+                    section_id_map[section.title] = engram.id
+                    section_key_quality[section.title] = body_quality
 
         # Step 5: Create engrams for definitions
+        definition_id_map = {}
         for defn in definitions:
             engram = Engram(
                 content=f'"{defn.term}" means {defn.definition}',
@@ -152,6 +160,7 @@ class EngramDB:
                 }
             )
             engrams.append(engram)
+            definition_id_map[defn.term] = engram.id
             section_id_map[defn.term] = engram.id
 
         # Step 6: Generate embeddings
@@ -185,6 +194,42 @@ class EngramDB:
         # Step 9: Create parent-child synapses for section hierarchy
         for section in sections:
             self._create_hierarchy_synapses(section, section_id_map, synapses)
+
+        # Step 9.5: Connect definitions to sections where terms are used.
+        # This gives definition-usage queries real graph paths instead of isolated definition nodes.
+        seen_definition_links = set()
+        for term, usages in term_usages.items():
+            definition_id = definition_id_map.get(term)
+            if not definition_id:
+                continue
+
+            for usage in usages:
+                containing_section = self._find_section_for_position(
+                    usage.position,
+                    flat_sections
+                )
+                if containing_section is None:
+                    continue
+
+                section_key = containing_section.number or containing_section.title
+                if not section_key:
+                    continue
+
+                section_id = section_id_map.get(section_key)
+                if not section_id or section_id == definition_id:
+                    continue
+
+                edge_key = (definition_id, section_id)
+                if edge_key in seen_definition_links:
+                    continue
+
+                synapses.append(Synapse(
+                    source_id=definition_id,
+                    target_id=section_id,
+                    synapse_type=SynapseType.DEFINES,
+                    metadata={"term": term}
+                ))
+                seen_definition_links.add(edge_key)
 
         # Step 10: Store synapses
         if synapses:
@@ -221,12 +266,41 @@ class EngramDB:
             # Recurse
             self._create_hierarchy_synapses(child, section_id_map, synapses)
 
+    def _build_section_content(self, section: Section) -> str:
+        """Build section text with heading context to avoid empty vectors."""
+        heading_parts = []
+        if section.number:
+            heading_parts.append(f"Section {section.number}")
+        if section.title:
+            heading_parts.append(section.title)
+
+        heading = " - ".join(heading_parts).strip()
+        body = section.content.strip()
+
+        if heading and body:
+            return f"{heading}\n\n{body}"
+        if heading:
+            return heading
+        return body
+
+    def _find_section_for_position(
+        self,
+        position: int,
+        sections: list[Section]
+    ) -> Optional[Section]:
+        """Find the parsed section containing a character position."""
+        for section in sections:
+            if section.start_pos <= position < section.end_pos:
+                return section
+        return None
+
     def query(
         self,
         query: str,
         top_k_anchors: int = 3,
         max_hops: int = 2,
-        max_context_items: int = 10
+        max_context_items: int = 10,
+        min_traversed_items: int = 0
     ) -> RetrievalResult:
         """
         Query the database using hybrid retrieval.
@@ -236,6 +310,7 @@ class EngramDB:
             top_k_anchors: Number of vector search anchors
             max_hops: Graph traversal depth
             max_context_items: Maximum engrams to return
+            min_traversed_items: Minimum non-anchor traversed items to keep in context
 
         Returns:
             RetrievalResult with retrieved engrams
@@ -244,7 +319,8 @@ class EngramDB:
             query=query,
             top_k_anchors=top_k_anchors,
             max_hops=max_hops,
-            max_context_items=max_context_items
+            max_context_items=max_context_items,
+            min_traversed_items=min_traversed_items
         )
 
     def query_vector_only(

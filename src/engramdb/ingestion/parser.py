@@ -82,7 +82,7 @@ class SectionParser:
         ),
         # "1.2.3 Title" or "1.2.3. Title"
         (
-            r'^[ \t]*(\d+(?:\.\d+)*)\.?\s+([A-Z][A-Za-z\s]+?)[ \t]*$',
+            r"^[ \t]*(\d+(?:\.\d+)*)\.?\s+([A-Z][A-Za-z0-9/&(),'\-\s]+?)[ \t]*$",
             'numbered',
             lambda m: (m.group(1), m.group(2).strip(), m.group(1).count('.') + 1)
         ),

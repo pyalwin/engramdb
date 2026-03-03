@@ -311,34 +311,52 @@ class DuckDBStorage:
         """
         self._ensure_connected()
 
+        if not embedding:
+            return []
+
         # Build type filter
         type_filter = ""
-        params = [embedding, embedding, top_k]
+        params = [embedding, top_k]
 
         if engram_types:
             type_values = [t.value for t in engram_types]
             placeholders = ",".join(["?"] * len(type_values))
             type_filter = f"AND engram_type IN ({placeholders})"
-            params = [embedding, embedding] + type_values + [top_k]
+            params = [embedding] + type_values + [top_k]
 
         # Cosine similarity using DuckDB's list functions
-        # cosine_sim = dot(a, b) / (norm(a) * norm(b))
+        # cosine_sim = dot(a, b) / (norm(a) * norm(b)).
+        # We explicitly filter zero-norm vectors to avoid NaN scores.
         results = self._connection.execute(f"""
-            WITH query_norm AS (
-                SELECT sqrt(list_sum(list_transform(?, x -> x * x))) AS norm
+            WITH query_vector AS (
+                SELECT ?::DOUBLE[] AS vector
+            ),
+            query_stats AS (
+                SELECT
+                    vector,
+                    sqrt(list_sum(list_transform(vector, x -> x * x))) AS norm
+                FROM query_vector
+            ),
+            scored AS (
+                SELECT
+                    e.id, e.content, e.engram_type, e.embedding, e.metadata, e.created_at,
+                    sqrt(list_sum(list_transform(e.embedding, x -> x * x))) AS embedding_norm,
+                    list_sum(list_transform(
+                        list_zip(e.embedding, (SELECT vector FROM query_stats)),
+                        x -> x[1] * x[2]
+                    )) AS dot_product
+                FROM engrams e
+                WHERE e.embedding IS NOT NULL
+                {type_filter}
             )
             SELECT
-                e.id, e.content, e.engram_type, e.embedding, e.metadata, e.created_at,
-                list_sum(list_transform(
-                    list_zip(e.embedding, ?),
-                    x -> x[1] * x[2]
-                )) / (
-                    sqrt(list_sum(list_transform(e.embedding, x -> x * x))) *
-                    (SELECT norm FROM query_norm)
-                ) AS similarity
-            FROM engrams e
-            WHERE e.embedding IS NOT NULL
-            {type_filter}
+                id, content, engram_type, embedding, metadata, created_at,
+                dot_product / (embedding_norm * (SELECT norm FROM query_stats)) AS similarity
+            FROM scored
+            WHERE embedding_norm > 0
+              AND (SELECT norm FROM query_stats) > 0
+              AND dot_product IS NOT NULL
+              AND NOT isnan(dot_product / (embedding_norm * (SELECT norm FROM query_stats)))
             ORDER BY similarity DESC
             LIMIT ?
         """, params).fetchall()
@@ -432,6 +450,41 @@ class DuckDBStorage:
         synapses = [self._row_to_synapse(row) for row in results]
 
         return engrams, synapses
+
+    # === Section Lookup ===
+
+    def find_by_section_number(
+        self,
+        section_number: str,
+        document_id: Optional[str] = None,
+    ) -> list[Engram]:
+        """
+        Find engrams whose metadata contains a matching section_number.
+
+        Args:
+            section_number: Section number to match (e.g. "6", "3.1")
+            document_id: Optional document_id filter in metadata
+
+        Returns:
+            List of matching Engram objects
+        """
+        self._ensure_connected()
+
+        if document_id:
+            results = self._connection.execute("""
+                SELECT id, content, engram_type, embedding, metadata, created_at
+                FROM engrams
+                WHERE json_extract_string(metadata, '$.section_number') = ?
+                  AND json_extract_string(metadata, '$.document_id') = ?
+            """, [section_number, document_id]).fetchall()
+        else:
+            results = self._connection.execute("""
+                SELECT id, content, engram_type, embedding, metadata, created_at
+                FROM engrams
+                WHERE json_extract_string(metadata, '$.section_number') = ?
+            """, [section_number]).fetchall()
+
+        return [self._row_to_engram(row) for row in results]
 
     # === Utility ===
 

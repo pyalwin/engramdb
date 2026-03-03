@@ -37,12 +37,45 @@ The structure extraction is entirely rule-based (regex patterns for headings, de
 
 Hypothesis: document-native structure in contracts is a free, reliable signal that vector similarity misses, especially for multi-hop reasoning.
 
-Benchmark setup:
+## Benchmark Results
 
-- Compare EngramDB vs naive vector RAG on multi-hop questions over CUAD (510 commercial contracts from SEC filings)
-- Target improvements:
-  - `2-hop`: about `30% -> 60%` recall
-  - `3-hop`: about `15% -> 50%` recall
+Evaluated on 183 multi-hop questions across 35 CUAD contracts (SEC filings). Each question requires retrieving 2-3 structurally linked sections to answer correctly.
+
+| Metric | Hybrid | Vector-only |
+|--------|--------|-------------|
+| **Overall recall** | 92.8% | 68.2% |
+| **2-hop recall** | 97.6% | 66.8% |
+| **3-hop recall** | 86.5% | 70.0% |
+
+By question type:
+
+| Type | Hybrid | Vector | Improvement |
+|------|--------|--------|-------------|
+| Cross-reference | 99.4% | 65.4% | +34.0pp |
+| Termination chain | 100% | 78.1% | +21.9pp |
+| Definition usage | 80.5% | 70.3% | +10.2pp |
+
+Cross-references and termination chains benefit most — these are cases where the answer spans sections connected by `REFERENCES` or `DEFINES` edges that share little vocabulary with the query. Definition usage shows a smaller gain because defined terms like "Agreement" appear broadly across contracts, making structural signal less distinctive.
+
+### Failure Analysis
+
+Of 183 questions, 13 still fail (hybrid recall < 1.0). Two failure modes:
+
+**Traversed but ranked out (majority):** The graph discovers the required section but scoring drops it outside the top-K window. This happens when dense graph neighborhoods produce 50-80+ traversed candidates competing for ~7 non-anchor slots. Mitigated by edge-type-aware reservation (REFERENCES/DEFINES edges get priority over PARENT_OF) and semantic re-ranking within each edge-type tier.
+
+**Not reachable from anchors (minority):** Queries referencing sections by number (e.g., "Section 6 references Section 3") get no relevant anchors because vector search can't match section numbers. Addressed by injecting section-number anchors via metadata lookup when the query mentions `Section N`.
+
+### Scoring Details
+
+The retrieval pipeline scores each candidate as a weighted blend:
+
+```
+score = 0.5 * semantic_similarity + 0.5 * structural_score
+```
+
+Structural score decays by hop distance (`0.75` per hop) and edge type weight (`REFERENCES: 1.0`, `DEFINES: 0.9`, `PARENT_OF: 0.55`). Anchors get `structural_score = 1.0`.
+
+Reserved traversal slots (default 4) ensure graph-discovered nodes aren't completely displaced by high-similarity anchors. Within reserved slots, candidates are sorted by edge-type tier first, then by semantic similarity — preventing PARENT_OF nodes with decent similarity from consuming slots over more relevant REFERENCES nodes.
 
 Everything runs locally in a single DuckDB file with no external vector database and no GPU requirement for the database engine.
 

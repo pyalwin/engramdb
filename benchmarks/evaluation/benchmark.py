@@ -22,6 +22,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent / "src"))
 
 from engramdb import EngramDB
 from engramdb.embeddings.embedder import MockEmbedder, create_embedder
+from engramdb.core.synapse import SynapseType
 
 
 @dataclass
@@ -37,6 +38,11 @@ class RetrievalMetrics:
     hybrid_recall: float
     hybrid_hop_coverage: float
     hybrid_time_ms: float
+    anchors_count: int
+    traversed_discovered: int
+    traversed_in_final: int
+    anchor_only_recall: float
+    hybrid_gain_over_anchor_only: float
 
     # Vector-only results
     vector_retrieved: list[str]
@@ -59,6 +65,11 @@ class BenchmarkResults:
     avg_vector_recall: float
     avg_hybrid_hop_coverage: float
     avg_vector_hop_coverage: float
+    avg_anchors_count: float
+    avg_traversed_discovered: float
+    avg_traversed_in_final: float
+    avg_anchor_only_recall: float
+    avg_hybrid_gain_over_anchor_only: float
 
     # By question type
     metrics_by_type: dict
@@ -84,6 +95,11 @@ class BenchmarkResults:
                 "avg_vector_hop_coverage": self.avg_vector_hop_coverage,
                 "avg_hybrid_time_ms": self.avg_hybrid_time_ms,
                 "avg_vector_time_ms": self.avg_vector_time_ms,
+                "avg_anchors_count": self.avg_anchors_count,
+                "avg_traversed_discovered": self.avg_traversed_discovered,
+                "avg_traversed_in_final": self.avg_traversed_in_final,
+                "avg_anchor_only_recall": self.avg_anchor_only_recall,
+                "avg_hybrid_gain_over_anchor_only": self.avg_hybrid_gain_over_anchor_only,
                 "hybrid_improvement": self.avg_hybrid_recall - self.avg_vector_recall,
             },
             "by_question_type": self.metrics_by_type,
@@ -109,7 +125,12 @@ class Benchmark:
         embedding_backend: str = "mock",
         top_k_anchors: int = 3,
         max_hops: int = 2,
-        max_context_items: int = 10
+        max_context_items: int = 10,
+        min_traversed_items: int = 0,
+        semantic_weight: Optional[float] = None,
+        hop_decay: Optional[float] = None,
+        default_edge_weight: Optional[float] = None,
+        edge_type_weights: Optional[dict[str, float]] = None,
     ):
         """
         Initialize benchmark.
@@ -119,11 +140,21 @@ class Benchmark:
             top_k_anchors: Number of vector search anchors for hybrid
             max_hops: Graph traversal depth
             max_context_items: Max items to retrieve
+            min_traversed_items: Minimum non-anchor traversed items retained in final context
+            semantic_weight: Override hybrid semantic score weight (optional)
+            hop_decay: Override graph hop decay factor (optional)
+            default_edge_weight: Override fallback edge weight (optional)
+            edge_type_weights: Override per-edge-type weights, keyed by synapse value/name
         """
         self.embedding_backend = embedding_backend
         self.top_k_anchors = top_k_anchors
         self.max_hops = max_hops
         self.max_context_items = max_context_items
+        self.min_traversed_items = min_traversed_items
+        self.semantic_weight = semantic_weight
+        self.hop_decay = hop_decay
+        self.default_edge_weight = default_edge_weight
+        self.edge_type_weights = edge_type_weights or {}
 
     def load_dataset(self, filepath: Path) -> dict:
         """Load multi-hop QA dataset."""
@@ -146,6 +177,11 @@ class Benchmark:
         print(f"Embedding backend: {self.embedding_backend}")
         print(f"Top-K anchors: {self.top_k_anchors}")
         print(f"Max hops: {self.max_hops}")
+        print(f"Min traversed items: {self.min_traversed_items}")
+        if self.semantic_weight is not None:
+            print(f"Semantic weight: {self.semantic_weight}")
+        if self.hop_decay is not None:
+            print(f"Hop decay: {self.hop_decay}")
         print()
 
         # Load dataset
@@ -178,6 +214,7 @@ class Benchmark:
 
             # Create EngramDB instance for this contract
             with EngramDB(embedding_backend=self.embedding_backend) as db:
+                self._configure_retriever(db)
                 # Ingest contract
                 print(f"  Ingesting...")
                 db.ingest(contract["text"], doc_id=contract_id)
@@ -206,7 +243,8 @@ class Benchmark:
             query,
             top_k_anchors=self.top_k_anchors,
             max_hops=self.max_hops,
-            max_context_items=self.max_context_items
+            max_context_items=self.max_context_items,
+            min_traversed_items=self.min_traversed_items
         )
         hybrid_time = (time.time() - start) * 1000
 
@@ -230,6 +268,18 @@ class Benchmark:
         hybrid_hop_coverage = self._calculate_hop_coverage(required_sections, hybrid_sections)
         vector_hop_coverage = self._calculate_hop_coverage(required_sections, vector_sections)
 
+        anchor_engrams = db.storage.get_engrams(hybrid_result.anchor_ids)
+        anchor_sections = self._extract_sections(anchor_engrams)
+        anchor_only_recall = self._calculate_recall(required_sections, anchor_sections)
+
+        anchor_ids = set(hybrid_result.anchor_ids)
+        traversed_ids = set(hybrid_result.traversed_ids)
+        traversed_in_final = sum(
+            1
+            for e in hybrid_result.engrams
+            if e.id in traversed_ids and e.id not in anchor_ids
+        )
+
         return RetrievalMetrics(
             question_id=question["id"],
             question_type=question["question_type"],
@@ -239,12 +289,41 @@ class Benchmark:
             hybrid_recall=hybrid_recall,
             hybrid_hop_coverage=hybrid_hop_coverage,
             hybrid_time_ms=hybrid_time,
+            anchors_count=len(anchor_ids),
+            traversed_discovered=len(traversed_ids),
+            traversed_in_final=traversed_in_final,
+            anchor_only_recall=anchor_only_recall,
+            hybrid_gain_over_anchor_only=hybrid_recall - anchor_only_recall,
             vector_retrieved=vector_sections,
             vector_recall=vector_recall,
             vector_hop_coverage=vector_hop_coverage,
             vector_time_ms=vector_time,
             hybrid_advantage=hybrid_recall - vector_recall,
         )
+
+    def _configure_retriever(self, db: EngramDB) -> None:
+        """Apply optional retrieval scoring overrides for tuning experiments."""
+        retriever = db.retriever
+
+        if self.semantic_weight is not None:
+            retriever.semantic_weight = self.semantic_weight
+        if self.hop_decay is not None:
+            retriever.hop_decay = self.hop_decay
+        if self.default_edge_weight is not None:
+            retriever.default_edge_weight = self.default_edge_weight
+
+        if not self.edge_type_weights:
+            return
+
+        for key, value in self.edge_type_weights.items():
+            synapse_type = None
+            for member in SynapseType:
+                if key == member.value or key == member.name:
+                    synapse_type = member
+                    break
+            if synapse_type is None:
+                raise ValueError(f"Unknown synapse type override: {key}")
+            retriever.edge_type_weights[synapse_type] = value
 
     def _extract_sections(self, engrams) -> list[str]:
         """Extract section identifiers from engrams."""
@@ -307,6 +386,11 @@ class Benchmark:
                 avg_vector_recall=0,
                 avg_hybrid_hop_coverage=0,
                 avg_vector_hop_coverage=0,
+                avg_anchors_count=0,
+                avg_traversed_discovered=0,
+                avg_traversed_in_final=0,
+                avg_anchor_only_recall=0,
+                avg_hybrid_gain_over_anchor_only=0,
                 metrics_by_type={},
                 metrics_by_hops={},
                 avg_hybrid_time_ms=0,
@@ -321,6 +405,11 @@ class Benchmark:
         avg_vector_hop = sum(m.vector_hop_coverage for m in metrics) / len(metrics)
         avg_hybrid_time = sum(m.hybrid_time_ms for m in metrics) / len(metrics)
         avg_vector_time = sum(m.vector_time_ms for m in metrics) / len(metrics)
+        avg_anchors_count = sum(m.anchors_count for m in metrics) / len(metrics)
+        avg_traversed_discovered = sum(m.traversed_discovered for m in metrics) / len(metrics)
+        avg_traversed_in_final = sum(m.traversed_in_final for m in metrics) / len(metrics)
+        avg_anchor_only_recall = sum(m.anchor_only_recall for m in metrics) / len(metrics)
+        avg_hybrid_gain_over_anchor_only = sum(m.hybrid_gain_over_anchor_only for m in metrics) / len(metrics)
 
         # By question type
         by_type = {}
@@ -363,6 +452,11 @@ class Benchmark:
             avg_vector_recall=avg_vector_recall,
             avg_hybrid_hop_coverage=avg_hybrid_hop,
             avg_vector_hop_coverage=avg_vector_hop,
+            avg_anchors_count=avg_anchors_count,
+            avg_traversed_discovered=avg_traversed_discovered,
+            avg_traversed_in_final=avg_traversed_in_final,
+            avg_anchor_only_recall=avg_anchor_only_recall,
+            avg_hybrid_gain_over_anchor_only=avg_hybrid_gain_over_anchor_only,
             metrics_by_type=by_type,
             metrics_by_hops={str(k): v for k, v in sorted(by_hops.items())},
             avg_hybrid_time_ms=avg_hybrid_time,
@@ -402,6 +496,12 @@ def print_results(results: BenchmarkResults):
     print("\n--- Timing ---")
     print(f"  Hybrid avg: {results.avg_hybrid_time_ms:.1f}ms")
     print(f"  Vector avg: {results.avg_vector_time_ms:.1f}ms")
+    print("\n--- Hybrid Diagnostics ---")
+    print(f"  Avg anchors/query:            {results.avg_anchors_count:.2f}")
+    print(f"  Avg traversed discovered:     {results.avg_traversed_discovered:.2f}")
+    print(f"  Avg traversed in final:       {results.avg_traversed_in_final:.2f}")
+    print(f"  Avg anchor-only recall:       {results.avg_anchor_only_recall:.1%}")
+    print(f"  Avg gain vs anchor-only:      {results.avg_hybrid_gain_over_anchor_only:+.1%}")
 
 
 def main():
@@ -413,14 +513,13 @@ def main():
         print("Run multihop_generator.py first to create the dataset.")
         return
 
-    # Run benchmark
-    # Increase anchors so hybrid has more semantic starting points
-    # before graph expansion - fairer comparison to vector-only
+    # Run benchmark with separate semantic and graph slots so traversal can contribute.
     benchmark = Benchmark(
         embedding_backend="openai",  # Use OpenAI embeddings for real evaluation
-        top_k_anchors=5,  # More anchors for hybrid
+        top_k_anchors=8,
         max_hops=2,
-        max_context_items=15  # Larger context window
+        max_context_items=15,  # Larger context window
+        min_traversed_items=4
     )
 
     results = benchmark.run(dataset_path)
