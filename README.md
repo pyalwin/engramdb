@@ -4,6 +4,48 @@ Schema-aware hybrid retrieval for multi-hop legal reasoning.
 
 EngramDB combines vector retrieval with graph traversal over document-native structure (sections, definitions, cross-references). It is built for contract-style documents where relevant evidence is often spread across multiple sections.
 
+## The Core Problem
+
+Standard RAG (vector-only) retrieves document chunks by semantic similarity. This works when the answer lives in a single chunk, but legal contracts often scatter related information across multiple sections.
+
+Example:
+
+- A Termination clause says "Either party may terminate for Cause"
+- "Cause" is defined earlier in Definitions
+- Exceptions to termination live in a separate General Provisions subsection
+
+If you ask "Under what conditions can we terminate?", vector search may return the Termination clause but miss the definition and exceptions because they do not share enough vocabulary with the query. The LLM then answers from partial context.
+
+## What EngramDB Does Differently
+
+EngramDB treats each document section as a node (Engram) in a graph, connected by edges (Synapses) extracted from document structure:
+
+- Section hierarchy: `Article I -> Section 1.1 -> Section 1.1.1`
+- Defined terms: `"Cause"` defined in one section and used in others
+- Cross-references: `See Section 4.2`, `per Article III`
+
+Retrieval runs in two phases:
+
+1. Vector search finds relevant anchor nodes
+2. Graph walk expands from anchors across structural edges (`1-3` hops)
+
+This gathers context that is structurally related to the answer, not only semantically similar.
+
+## Why This Is Interesting (Research)
+
+The structure extraction is entirely rule-based (regex patterns for headings, definitions, and cross-references). There are no LLM calls during ingestion.
+
+Hypothesis: document-native structure in contracts is a free, reliable signal that vector similarity misses, especially for multi-hop reasoning.
+
+Benchmark setup:
+
+- Compare EngramDB vs naive vector RAG on multi-hop questions over CUAD (510 commercial contracts from SEC filings)
+- Target improvements:
+  - `2-hop`: about `30% -> 60%` recall
+  - `3-hop`: about `15% -> 50%` recall
+
+Everything runs locally in a single DuckDB file with no external vector database and no GPU requirement for the database engine.
+
 ## Features
 
 - Rule-based ingestion pipeline (no LLM needed for structure extraction)
