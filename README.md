@@ -1,162 +1,167 @@
 # EngramDB
 
-Schema-Aware Hybrid Retrieval for Multi-Hop Legal Reasoning
+Schema-aware hybrid retrieval for multi-hop legal reasoning.
 
-EngramDB is a hybrid vector + graph memory engine that extracts document-native structure (headings, cross-references, defined terms) and uses it to improve retrieval on multi-hop reasoning tasks. It targets legal contracts where standard vector RAG fails to connect facts spread across distant sections.
+EngramDB combines vector retrieval with graph traversal over document-native structure (sections, definitions, cross-references). It is built for contract-style documents where relevant evidence is often spread across multiple sections.
 
-## The Problem
+## Features
 
-Vector-only RAG retrieves by semantic similarity. This works for single-fact lookups but breaks down when answering a question requires connecting information across multiple document sections:
+- Rule-based ingestion pipeline (no LLM needed for structure extraction)
+- DuckDB storage for engrams (nodes), synapses (edges), and embeddings
+- Hybrid retrieval:
+  - Vector search to find anchor nodes
+  - Graph expansion to collect connected context
+- Pluggable embedding backends: `mock`, `openai`, `local`
 
-- **"Can we terminate if they breach confidentiality?"** requires linking the Termination clause to the Confidentiality clause via cross-references
-- **"What does 'Material Adverse Change' mean in the context of termination?"** requires finding a definition, then tracing where it's used
-- **"Are there exceptions to the non-compete?"** requires traversing parent-child section relationships
+## Requirements
 
-Standard RAG retrieves the most similar chunks independently. EngramDB retrieves anchor chunks *and then walks the document's own reference graph* to gather connected context.
+- Python `>=3.12`
+- [uv](https://docs.astral.sh/uv/) (recommended) or `pip`
 
-## How It Works
-
-Every ingested document section becomes an **Engram** (node) with three layers:
-
-1. **Content** — raw text
-2. **Vector** — semantic embedding for fuzzy search
-3. **Graph** — explicit relationships (**Synapses**) extracted from document structure
-
-Retrieval uses **hybrid traversal**:
-
-```
-Query → Embed → Vector search (find anchors) → Graph walk (expand context) → Rank → Return
-```
-
-The graph edges come from the document itself — no LLM extraction needed:
-
-| Edge Type | Source |
-|-----------|--------|
-| `PARENT_OF` / `CHILD_OF` | Section hierarchy (Article I → Section 1.1 → Section 1.1.1) |
-| `DEFINES` | Definition sections ("Confidential Information" means...) |
-| `REFERENCES` | Cross-references (See Section 4.2, per Article III) |
-
-## Quick Start
+## Install
 
 ```bash
-# Install
-pip install -e .
-
-# Or with uv
+# Core dependencies
 uv sync
+
+# Development tools (pytest, ruff, mypy)
+uv sync --extra dev
+
+# Local embedding backend (sentence-transformers)
+uv sync --extra local
+
+# Benchmark dependencies
+uv sync --extra benchmark
 ```
 
-### Ingest a contract
+`pip` alternative:
+
+```bash
+pip install -e .
+pip install -e ".[dev]"
+pip install -e ".[local]"
+pip install -e ".[benchmark]"
+```
+
+## Quick Start
 
 ```python
 from engramdb import EngramDB
 
-db = EngramDB(db_path="my_contracts.duckdb", embedding_backend="mock")
+contract_text = """
+MUTUAL NON-DISCLOSURE AGREEMENT
 
-with open("contract.md") as f:
-    text = f.read()
+1.1 Definitions
+"Confidential Information" means non-public information.
 
-result = db.ingest(text, document_id="nda-001", title="Acme NDA")
-print(f"Ingested {result.engram_count} sections, {result.synapse_count} relationships")
+4.2 Termination
+Either party may terminate this Agreement with 30 days notice.
+"""
+
+with EngramDB(db_path="data/example.duckdb", embedding_backend="mock") as db:
+    ingest = db.ingest(contract_text, doc_id="nda_001")
+    print(f"Engrams: {ingest.num_engrams}, Synapses: {ingest.num_synapses}")
+
+    result = db.query(
+        "Can either party terminate this agreement?",
+        top_k_anchors=3,
+        max_hops=2,
+        max_context_items=10,
+    )
+
+    print(db.get_context_string(result, include_metadata=True))
+    print(db.stats())
 ```
 
-### Query with hybrid retrieval
+## Embedding Backends
+
+- `mock`: deterministic pseudo-embeddings for tests and local development
+- `openai`: uses OpenAI embeddings (`OPENAI_API_KEY` required)
+- `local`: uses sentence-transformers (`uv sync --extra local`)
+
+Example:
 
 ```python
-db = EngramDB(db_path="my_contracts.duckdb")
-
-result = db.query("Can we terminate if they breach confidentiality?", top_k=10, hops=2)
-
-for engram in result.engrams:
-    meta = engram.metadata
-    print(f"[{engram.engram_type.value}] {meta.get('section_number', '')} {meta.get('title', '')}")
-    print(f"  {engram.content[:120]}...")
-    print()
-```
-
-### Embedding backends
-
-```python
-# Mock (deterministic hashing, no API calls — good for testing)
-db = EngramDB(db_path="test.duckdb", embedding_backend="mock")
-
-# OpenAI (text-embedding-3-small, 1536 dims)
-db = EngramDB(db_path="prod.duckdb", embedding_backend="openai")
-
-# Local sentence-transformers (requires `pip install -e ".[local]"`)
-db = EngramDB(db_path="local.duckdb", embedding_backend="local")
+db = EngramDB(embedding_backend="mock")
+db = EngramDB(embedding_backend="openai")
+db = EngramDB(embedding_backend="local")
 ```
 
 ## Ingestion Pipeline
 
-The ingestion pipeline is entirely rule-based (regex, no LLM calls):
+1. Parse sections and heading hierarchy (`ingestion/parser.py`)
+2. Extract defined terms (`ingestion/definitions.py`)
+3. Extract and resolve references (`ingestion/references.py`)
+4. Create engrams and synapses
+5. Optionally generate embeddings and store in DuckDB
 
-1. **Section Parser** — detects heading patterns (`ARTICLE I`, `Section 1.2.3`, `DEFINITIONS`, etc.) and builds a hierarchy tree
-2. **Definition Extractor** — finds defined terms (`"X" means...`, `"X" shall mean...`) and links them to their usage sites
-3. **Reference Linker** — resolves cross-references (`Section 4.2`, `Article III`, `Exhibit A`) to actual section nodes
+## Benchmark Workflow (CUAD)
 
-Each step creates Engrams (nodes) and Synapses (edges) stored in DuckDB.
-
-## Project Structure
-
+1. Download/process CUAD contracts:
+```bash
+uv run python benchmarks/datasets/cuad_loader.py
 ```
+
+2. Generate multi-hop QA dataset:
+```bash
+uv run python benchmarks/datasets/multihop_generator.py
+```
+
+3. Run hybrid vs vector-only benchmark:
+```bash
+export OPENAI_API_KEY=your_key_here
+uv run python benchmarks/evaluation/benchmark.py
+```
+
+Helpful ingestion script for a persistent EngramDB file:
+
+```bash
+uv run python scripts/ingest_cuad.py --embedding-backend mock --max-contracts 50 --force
+```
+
+Artifacts are written under `data/cuad/` (for example `benchmark_results.json`).
+
+## Development
+
+Run tests:
+
+```bash
+uv run --extra dev pytest -q
+```
+
+Lint/type-check:
+
+```bash
+uv run --extra dev ruff check .
+uv run --extra dev mypy src
+```
+
+## Project Layout
+
+```text
 src/engramdb/
-  core/           # Engram and Synapse data models
-  storage/        # DuckDB backend (CRUD, vector search, graph traversal)
-  embeddings/     # OpenAI, local, and mock embedding providers
-  ingestion/      # Parser, definition extractor, reference linker
-  retrieval/      # Hybrid vector+graph retrieval
-  db.py           # Main API
+  core/         # Engram and Synapse models
+  embeddings/   # Embedder backends and factory
+  ingestion/    # Section parsing, definition extraction, reference linking
+  retrieval/    # Hybrid and vector-only retrieval
+  storage/      # DuckDB persistence and graph/vector queries
+  db.py         # Main user-facing API
 
 benchmarks/
-  baselines/      # Naive RAG baseline
-  datasets/       # CUAD loader, multi-hop QA generator
-  evaluation/     # Metrics and benchmark runner
+  datasets/     # CUAD loader and multi-hop QA generator
+  evaluation/   # Benchmark runner and metrics
+  baselines/    # Naive RAG baseline scaffold
 
-tests/            # Unit and integration tests
-scripts/          # CUAD ingestion script
-data/             # DuckDB file, CUAD dataset, synthetic contracts
+scripts/        # Utility scripts (e.g., CUAD ingestion)
+tests/          # Unit and integration tests
 ```
-
-## Evaluation
-
-EngramDB is evaluated against the [CUAD dataset](https://www.atticusprojectai.org/cuad) (510 commercial legal contracts, 13,000+ expert QA annotations, 41 clause categories).
-
-The benchmark measures multi-hop reasoning improvement over naive vector RAG:
-
-| Hops | Baseline (vector-only) | Target (EngramDB) |
-|------|----------------------|-------------------|
-| 1-hop | ~80% | >= 80% (no regression) |
-| 2-hop | ~30% | >= 60% |
-| 3-hop | ~15% | >= 50% |
-
-### Run the CUAD ingestion
-
-```bash
-# Mock embeddings (fast, no API key needed)
-uv run python scripts/ingest_cuad.py --embedding-backend mock
-
-# OpenAI embeddings
-export OPENAI_API_KEY=sk-...
-uv run python scripts/ingest_cuad.py --embedding-backend openai --max-contracts 50
-```
-
-## Running Tests
-
-```bash
-pytest tests/ -v
-```
-
-## Tech Stack
-
-- **Storage**: DuckDB (embedded, single-file, vector search via cosine similarity)
-- **Language**: Python 3.12+
-- **Embeddings**: OpenAI `text-embedding-3-small` (1536d) or local `intfloat/e5-base-v2` (768d)
-- **No external services required** — everything runs on a laptop
 
 ## Status
 
-Alpha (v0.1.0). Core ingestion and hybrid retrieval are functional. Benchmark evaluation is in progress.
+Alpha (`0.1.0`).
+
+- Core ingestion and retrieval are implemented.
+- Baseline implementation in `benchmarks/baselines/naive_rag.py` is currently a scaffold.
 
 ## License
 
