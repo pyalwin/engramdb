@@ -429,6 +429,85 @@ class HybridRetriever:
 
         return dot / math.sqrt(query_norm_sq * candidate_norm_sq)
 
+    def retrieve_graph_only(
+        self,
+        query: str,
+        top_k_anchors: int = 3,
+        max_hops: int = 2,
+        max_context_items: int = 10,
+        engram_types: Optional[list[EngramType]] = None
+    ) -> RetrievalResult:
+        """
+        Graph-only retrieval (ablation baseline).
+
+        Uses vector search only to find initial anchors, then returns
+        graph-traversed nodes ranked purely by structural score (no
+        semantic blending). This isolates the graph contribution.
+        """
+        query_embedding = self.embedder.embed(query)
+        anchor_results = self.storage.search_similar(
+            query_embedding,
+            top_k=top_k_anchors,
+            engram_types=engram_types
+        )
+
+        if not anchor_results:
+            return RetrievalResult(engrams=[], anchor_ids=[], traversed_ids=[], scores={})
+
+        # Inject section-number anchors (same as hybrid)
+        section_matches = re.findall(r'[Ss]ection\s+(\d+(?:\.\d+)*)', query)
+        if section_matches:
+            existing_anchor_ids = {e.id for e, _ in anchor_results}
+            for sec_num in section_matches:
+                sec_engrams = self.storage.find_by_section_number(sec_num)
+                for engram in sec_engrams:
+                    if engram.id not in existing_anchor_ids and engram.embedding:
+                        sim = self._cosine_similarity(query_embedding, engram.embedding)
+                        anchor_results.append((engram, sim))
+                        existing_anchor_ids.add(engram.id)
+
+        anchor_ids = [engram.id for engram, _ in anchor_results]
+        anchor_id_set = set(anchor_ids)
+
+        # Graph traversal
+        traversed_info: dict[str, tuple[int, float]] = {}
+        for anchor_id in anchor_ids:
+            discovered = self._traverse_from_anchor(
+                anchor_id=anchor_id,
+                max_hops=max_hops,
+                direction="both",
+            )
+            for node_id, (hop, edge_weight) in discovered.items():
+                prior = traversed_info.get(node_id)
+                if prior is None or hop < prior[0] or (hop == prior[0] and edge_weight > prior[1]):
+                    traversed_info[node_id] = (hop, edge_weight)
+
+        all_ids = set(anchor_ids) | set(traversed_info.keys())
+        engrams = self.storage.get_engrams(list(all_ids))
+
+        # Score purely by structural signal (no semantic component)
+        scores: dict[str, float] = {}
+        for engram in engrams:
+            if engram.id in anchor_id_set:
+                scores[engram.id] = 1.0
+            elif engram.id in traversed_info:
+                hop, edge_weight = traversed_info[engram.id]
+                scores[engram.id] = edge_weight * (self.hop_decay ** max(hop - 1, 0))
+            else:
+                scores[engram.id] = 0.0
+
+        engrams.sort(key=lambda e: scores.get(e.id, 0.0), reverse=True)
+        engrams = engrams[:max_context_items]
+
+        traversed_ids = [eid for eid in traversed_info if eid not in anchor_id_set]
+
+        return RetrievalResult(
+            engrams=engrams,
+            anchor_ids=anchor_ids,
+            traversed_ids=traversed_ids,
+            scores=scores
+        )
+
     def retrieve_vector_only(
         self,
         query: str,

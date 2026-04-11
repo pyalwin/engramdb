@@ -50,8 +50,15 @@ class RetrievalMetrics:
     vector_hop_coverage: float
     vector_time_ms: float
 
+    # Graph-only results
+    graph_retrieved: list[str] = None
+    graph_recall: float = 0.0
+    graph_hop_coverage: float = 0.0
+    graph_time_ms: float = 0.0
+
     # Comparison
-    hybrid_advantage: float  # hybrid_recall - vector_recall
+    hybrid_advantage: float = 0.0  # hybrid_recall - vector_recall
+    hybrid_vs_graph: float = 0.0  # hybrid_recall - graph_recall
 
 
 @dataclass
@@ -63,8 +70,10 @@ class BenchmarkResults:
     # Aggregate metrics
     avg_hybrid_recall: float
     avg_vector_recall: float
+    avg_graph_recall: float
     avg_hybrid_hop_coverage: float
     avg_vector_hop_coverage: float
+    avg_graph_hop_coverage: float
     avg_anchors_count: float
     avg_traversed_discovered: float
     avg_traversed_in_final: float
@@ -80,6 +89,7 @@ class BenchmarkResults:
     # Timing
     avg_hybrid_time_ms: float
     avg_vector_time_ms: float
+    avg_graph_time_ms: float
 
     # Individual results
     per_question_metrics: list[RetrievalMetrics]
@@ -91,16 +101,20 @@ class BenchmarkResults:
                 "total_contracts": self.total_contracts,
                 "avg_hybrid_recall": self.avg_hybrid_recall,
                 "avg_vector_recall": self.avg_vector_recall,
+                "avg_graph_recall": self.avg_graph_recall,
                 "avg_hybrid_hop_coverage": self.avg_hybrid_hop_coverage,
                 "avg_vector_hop_coverage": self.avg_vector_hop_coverage,
+                "avg_graph_hop_coverage": self.avg_graph_hop_coverage,
                 "avg_hybrid_time_ms": self.avg_hybrid_time_ms,
                 "avg_vector_time_ms": self.avg_vector_time_ms,
+                "avg_graph_time_ms": self.avg_graph_time_ms,
                 "avg_anchors_count": self.avg_anchors_count,
                 "avg_traversed_discovered": self.avg_traversed_discovered,
                 "avg_traversed_in_final": self.avg_traversed_in_final,
                 "avg_anchor_only_recall": self.avg_anchor_only_recall,
                 "avg_hybrid_gain_over_anchor_only": self.avg_hybrid_gain_over_anchor_only,
-                "hybrid_improvement": self.avg_hybrid_recall - self.avg_vector_recall,
+                "hybrid_vs_vector": self.avg_hybrid_recall - self.avg_vector_recall,
+                "hybrid_vs_graph": self.avg_hybrid_recall - self.avg_graph_recall,
             },
             "by_question_type": self.metrics_by_type,
             "by_hop_count": self.metrics_by_hops,
@@ -225,7 +239,7 @@ class Benchmark:
                     all_metrics.append(metrics)
 
                     # Print progress
-                    print(f"    Q[{q['question_type']}]: hybrid={metrics.hybrid_recall:.0%} vector={metrics.vector_recall:.0%}")
+                    print(f"    Q[{q['question_type']}]: hybrid={metrics.hybrid_recall:.0%} vector={metrics.vector_recall:.0%} graph={metrics.graph_recall:.0%}")
 
         # Aggregate results
         results = self._aggregate_results(all_metrics, len(contracts))
@@ -261,12 +275,26 @@ class Benchmark:
 
         vector_sections = self._extract_sections(vector_result.engrams)
 
+        # Graph-only retrieval (ablation)
+        start = time.time()
+        graph_result = db.query_graph_only(
+            query,
+            top_k_anchors=self.top_k_anchors,
+            max_hops=self.max_hops,
+            max_context_items=self.max_context_items
+        )
+        graph_time = (time.time() - start) * 1000
+
+        graph_sections = self._extract_sections(graph_result.engrams)
+
         # Calculate metrics
         hybrid_recall = self._calculate_recall(required_sections, hybrid_sections)
         vector_recall = self._calculate_recall(required_sections, vector_sections)
+        graph_recall = self._calculate_recall(required_sections, graph_sections)
 
         hybrid_hop_coverage = self._calculate_hop_coverage(required_sections, hybrid_sections)
         vector_hop_coverage = self._calculate_hop_coverage(required_sections, vector_sections)
+        graph_hop_coverage = self._calculate_hop_coverage(required_sections, graph_sections)
 
         anchor_engrams = db.storage.get_engrams(hybrid_result.anchor_ids)
         anchor_sections = self._extract_sections(anchor_engrams)
@@ -298,7 +326,12 @@ class Benchmark:
             vector_recall=vector_recall,
             vector_hop_coverage=vector_hop_coverage,
             vector_time_ms=vector_time,
+            graph_retrieved=graph_sections,
+            graph_recall=graph_recall,
+            graph_hop_coverage=graph_hop_coverage,
+            graph_time_ms=graph_time,
             hybrid_advantage=hybrid_recall - vector_recall,
+            hybrid_vs_graph=hybrid_recall - graph_recall,
         )
 
     def _configure_retriever(self, db: EngramDB) -> None:
@@ -384,8 +417,10 @@ class Benchmark:
                 total_contracts=num_contracts,
                 avg_hybrid_recall=0,
                 avg_vector_recall=0,
+                avg_graph_recall=0,
                 avg_hybrid_hop_coverage=0,
                 avg_vector_hop_coverage=0,
+                avg_graph_hop_coverage=0,
                 avg_anchors_count=0,
                 avg_traversed_discovered=0,
                 avg_traversed_in_final=0,
@@ -395,63 +430,81 @@ class Benchmark:
                 metrics_by_hops={},
                 avg_hybrid_time_ms=0,
                 avg_vector_time_ms=0,
+                avg_graph_time_ms=0,
                 per_question_metrics=[],
             )
 
+        n = len(metrics)
+
         # Overall averages
-        avg_hybrid_recall = sum(m.hybrid_recall for m in metrics) / len(metrics)
-        avg_vector_recall = sum(m.vector_recall for m in metrics) / len(metrics)
-        avg_hybrid_hop = sum(m.hybrid_hop_coverage for m in metrics) / len(metrics)
-        avg_vector_hop = sum(m.vector_hop_coverage for m in metrics) / len(metrics)
-        avg_hybrid_time = sum(m.hybrid_time_ms for m in metrics) / len(metrics)
-        avg_vector_time = sum(m.vector_time_ms for m in metrics) / len(metrics)
-        avg_anchors_count = sum(m.anchors_count for m in metrics) / len(metrics)
-        avg_traversed_discovered = sum(m.traversed_discovered for m in metrics) / len(metrics)
-        avg_traversed_in_final = sum(m.traversed_in_final for m in metrics) / len(metrics)
-        avg_anchor_only_recall = sum(m.anchor_only_recall for m in metrics) / len(metrics)
-        avg_hybrid_gain_over_anchor_only = sum(m.hybrid_gain_over_anchor_only for m in metrics) / len(metrics)
+        avg_hybrid_recall = sum(m.hybrid_recall for m in metrics) / n
+        avg_vector_recall = sum(m.vector_recall for m in metrics) / n
+        avg_graph_recall = sum(m.graph_recall for m in metrics) / n
+        avg_hybrid_hop = sum(m.hybrid_hop_coverage for m in metrics) / n
+        avg_vector_hop = sum(m.vector_hop_coverage for m in metrics) / n
+        avg_graph_hop = sum(m.graph_hop_coverage for m in metrics) / n
+        avg_hybrid_time = sum(m.hybrid_time_ms for m in metrics) / n
+        avg_vector_time = sum(m.vector_time_ms for m in metrics) / n
+        avg_graph_time = sum(m.graph_time_ms for m in metrics) / n
+        avg_anchors_count = sum(m.anchors_count for m in metrics) / n
+        avg_traversed_discovered = sum(m.traversed_discovered for m in metrics) / n
+        avg_traversed_in_final = sum(m.traversed_in_final for m in metrics) / n
+        avg_anchor_only_recall = sum(m.anchor_only_recall for m in metrics) / n
+        avg_hybrid_gain_over_anchor_only = sum(m.hybrid_gain_over_anchor_only for m in metrics) / n
 
         # By question type
         by_type = {}
         for m in metrics:
             qtype = m.question_type
             if qtype not in by_type:
-                by_type[qtype] = {"hybrid_recall": [], "vector_recall": [], "count": 0}
+                by_type[qtype] = {"hybrid_recall": [], "vector_recall": [], "graph_recall": [], "count": 0}
             by_type[qtype]["hybrid_recall"].append(m.hybrid_recall)
             by_type[qtype]["vector_recall"].append(m.vector_recall)
+            by_type[qtype]["graph_recall"].append(m.graph_recall)
             by_type[qtype]["count"] += 1
 
         for qtype in by_type:
-            by_type[qtype]["avg_hybrid_recall"] = sum(by_type[qtype]["hybrid_recall"]) / len(by_type[qtype]["hybrid_recall"])
-            by_type[qtype]["avg_vector_recall"] = sum(by_type[qtype]["vector_recall"]) / len(by_type[qtype]["vector_recall"])
-            by_type[qtype]["improvement"] = by_type[qtype]["avg_hybrid_recall"] - by_type[qtype]["avg_vector_recall"]
+            cnt = by_type[qtype]["count"]
+            by_type[qtype]["avg_hybrid_recall"] = sum(by_type[qtype]["hybrid_recall"]) / cnt
+            by_type[qtype]["avg_vector_recall"] = sum(by_type[qtype]["vector_recall"]) / cnt
+            by_type[qtype]["avg_graph_recall"] = sum(by_type[qtype]["graph_recall"]) / cnt
+            by_type[qtype]["hybrid_vs_vector"] = by_type[qtype]["avg_hybrid_recall"] - by_type[qtype]["avg_vector_recall"]
+            by_type[qtype]["hybrid_vs_graph"] = by_type[qtype]["avg_hybrid_recall"] - by_type[qtype]["avg_graph_recall"]
             del by_type[qtype]["hybrid_recall"]
             del by_type[qtype]["vector_recall"]
+            del by_type[qtype]["graph_recall"]
 
         # By hop count
         by_hops = {}
         for m in metrics:
             hops = m.hop_count
             if hops not in by_hops:
-                by_hops[hops] = {"hybrid_recall": [], "vector_recall": [], "count": 0}
+                by_hops[hops] = {"hybrid_recall": [], "vector_recall": [], "graph_recall": [], "count": 0}
             by_hops[hops]["hybrid_recall"].append(m.hybrid_recall)
             by_hops[hops]["vector_recall"].append(m.vector_recall)
+            by_hops[hops]["graph_recall"].append(m.graph_recall)
             by_hops[hops]["count"] += 1
 
         for hops in by_hops:
-            by_hops[hops]["avg_hybrid_recall"] = sum(by_hops[hops]["hybrid_recall"]) / len(by_hops[hops]["hybrid_recall"])
-            by_hops[hops]["avg_vector_recall"] = sum(by_hops[hops]["vector_recall"]) / len(by_hops[hops]["vector_recall"])
-            by_hops[hops]["improvement"] = by_hops[hops]["avg_hybrid_recall"] - by_hops[hops]["avg_vector_recall"]
+            cnt = by_hops[hops]["count"]
+            by_hops[hops]["avg_hybrid_recall"] = sum(by_hops[hops]["hybrid_recall"]) / cnt
+            by_hops[hops]["avg_vector_recall"] = sum(by_hops[hops]["vector_recall"]) / cnt
+            by_hops[hops]["avg_graph_recall"] = sum(by_hops[hops]["graph_recall"]) / cnt
+            by_hops[hops]["hybrid_vs_vector"] = by_hops[hops]["avg_hybrid_recall"] - by_hops[hops]["avg_vector_recall"]
+            by_hops[hops]["hybrid_vs_graph"] = by_hops[hops]["avg_hybrid_recall"] - by_hops[hops]["avg_graph_recall"]
             del by_hops[hops]["hybrid_recall"]
             del by_hops[hops]["vector_recall"]
+            del by_hops[hops]["graph_recall"]
 
         return BenchmarkResults(
-            total_questions=len(metrics),
+            total_questions=n,
             total_contracts=num_contracts,
             avg_hybrid_recall=avg_hybrid_recall,
             avg_vector_recall=avg_vector_recall,
+            avg_graph_recall=avg_graph_recall,
             avg_hybrid_hop_coverage=avg_hybrid_hop,
             avg_vector_hop_coverage=avg_vector_hop,
+            avg_graph_hop_coverage=avg_graph_hop,
             avg_anchors_count=avg_anchors_count,
             avg_traversed_discovered=avg_traversed_discovered,
             avg_traversed_in_final=avg_traversed_in_final,
@@ -461,6 +514,7 @@ class Benchmark:
             metrics_by_hops={str(k): v for k, v in sorted(by_hops.items())},
             avg_hybrid_time_ms=avg_hybrid_time,
             avg_vector_time_ms=avg_vector_time,
+            avg_graph_time_ms=avg_graph_time,
             per_question_metrics=metrics,
         )
 
@@ -477,25 +531,29 @@ def print_results(results: BenchmarkResults):
     print("\n--- Overall Retrieval Recall ---")
     print(f"  Hybrid (vector + graph): {results.avg_hybrid_recall:.1%}")
     print(f"  Vector-only:             {results.avg_vector_recall:.1%}")
-    print(f"  Improvement:             {results.avg_hybrid_recall - results.avg_vector_recall:+.1%}")
+    print(f"  Graph-only:              {results.avg_graph_recall:.1%}")
+    print(f"  Hybrid vs Vector:        {results.avg_hybrid_recall - results.avg_vector_recall:+.1%}")
+    print(f"  Hybrid vs Graph:         {results.avg_hybrid_recall - results.avg_graph_recall:+.1%}")
 
     print("\n--- Hop Coverage ---")
     print(f"  Hybrid: {results.avg_hybrid_hop_coverage:.1%}")
     print(f"  Vector: {results.avg_vector_hop_coverage:.1%}")
+    print(f"  Graph:  {results.avg_graph_hop_coverage:.1%}")
 
     print("\n--- By Question Type ---")
     for qtype, data in results.metrics_by_type.items():
         print(f"  {qtype}:")
-        print(f"    Hybrid: {data['avg_hybrid_recall']:.1%}  Vector: {data['avg_vector_recall']:.1%}  Δ: {data['improvement']:+.1%}")
+        print(f"    Hybrid: {data['avg_hybrid_recall']:.1%}  Vector: {data['avg_vector_recall']:.1%}  Graph: {data['avg_graph_recall']:.1%}")
 
     print("\n--- By Hop Count ---")
     for hops, data in results.metrics_by_hops.items():
         print(f"  {hops} hops (n={data['count']}):")
-        print(f"    Hybrid: {data['avg_hybrid_recall']:.1%}  Vector: {data['avg_vector_recall']:.1%}  Δ: {data['improvement']:+.1%}")
+        print(f"    Hybrid: {data['avg_hybrid_recall']:.1%}  Vector: {data['avg_vector_recall']:.1%}  Graph: {data['avg_graph_recall']:.1%}")
 
     print("\n--- Timing ---")
     print(f"  Hybrid avg: {results.avg_hybrid_time_ms:.1f}ms")
     print(f"  Vector avg: {results.avg_vector_time_ms:.1f}ms")
+    print(f"  Graph avg:  {results.avg_graph_time_ms:.1f}ms")
     print("\n--- Hybrid Diagnostics ---")
     print(f"  Avg anchors/query:            {results.avg_anchors_count:.2f}")
     print(f"  Avg traversed discovered:     {results.avg_traversed_discovered:.2f}")

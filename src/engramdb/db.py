@@ -323,6 +323,26 @@ class EngramDB:
             min_traversed_items=min_traversed_items
         )
 
+    def query_graph_only(
+        self,
+        query: str,
+        top_k_anchors: int = 3,
+        max_hops: int = 2,
+        max_context_items: int = 10
+    ) -> RetrievalResult:
+        """
+        Query using graph-only retrieval (ablation baseline).
+
+        Uses vector search to find anchors, then ranks purely by
+        structural score without semantic blending.
+        """
+        return self.retriever.retrieve_graph_only(
+            query=query,
+            top_k_anchors=top_k_anchors,
+            max_hops=max_hops,
+            max_context_items=max_context_items
+        )
+
     def query_vector_only(
         self,
         query: str,
