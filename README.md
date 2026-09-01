@@ -211,6 +211,10 @@ uv run --extra dev ruff check .
 uv run --extra dev mypy src
 ```
 
+## Codebase Map
+
+`docs/codebase-map.html` is an interactive visual diagram of this codebase — the ingestion and retrieval pipelines drawn as an isometric machine, with animated dots carrying the real data values (a `Section`, a `Definition`, a `Synapse`, an embedding, blended scores) that flow between modules. Click a dot to inspect its payload, click a block for what it does and how it's built. Open it directly in a browser; it is a single self-contained file.
+
 ## Project Layout
 
 ```text

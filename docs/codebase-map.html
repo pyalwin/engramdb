@@ -1,0 +1,1107 @@
+<title>EngramDB Atlas</title>
+<style>
+  :root {
+    --paper: #d6cfa4;
+    --paper-deep: #cdc596;
+    --ink: #21200f;
+    --ink-60: rgba(33, 32, 15, 0.6);
+    --ink-38: rgba(33, 32, 15, 0.38);
+    --ink-18: rgba(33, 32, 15, 0.18);
+    --ink-08: rgba(33, 32, 15, 0.08);
+    --mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--mono);
+    font-size: 13px;
+    line-height: 1.55;
+    overflow: hidden;
+  }
+  #app {
+    display: grid;
+    grid-template-rows: auto 1fr;
+    grid-template-columns: 236px 1fr 400px;
+    grid-template-areas:
+      "topbar topbar topbar"
+      "sidebar stage panel";
+    height: 100vh;
+  }
+  @media (max-width: 980px) {
+    #app {
+      grid-template-columns: 1fr;
+      grid-template-rows: auto 55vh auto;
+      grid-template-areas: "topbar" "stage" "panel";
+      height: auto;
+    }
+    body { overflow: auto; }
+    #sidebar { display: none; }
+  }
+
+  /* ---------- top bar ---------- */
+  #topbar {
+    grid-area: topbar;
+    display: flex;
+    align-items: stretch;
+    border-bottom: 1.5px solid var(--ink);
+    background: var(--paper);
+    min-height: 54px;
+  }
+  .stat {
+    padding: 7px 16px 6px;
+    border-right: 1px solid var(--ink-38);
+    min-width: 0;
+  }
+  .stat .k {
+    font-size: 9.5px;
+    letter-spacing: 0.14em;
+    color: var(--ink-60);
+    text-transform: uppercase;
+    white-space: nowrap;
+  }
+  .stat .v { font-size: 14.5px; white-space: nowrap; }
+  #topbar .spacer { flex: 1; }
+  #controls { display: flex; align-items: center; gap: 8px; padding: 0 14px; }
+  button.ctl {
+    font: inherit;
+    font-size: 11px;
+    letter-spacing: 0.1em;
+    background: var(--paper);
+    color: var(--ink);
+    border: 1.5px solid var(--ink);
+    padding: 6px 12px;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  button.ctl:hover { background: var(--ink); color: var(--paper); }
+  button.ctl:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+
+  /* ---------- sidebar ---------- */
+  #sidebar {
+    grid-area: sidebar;
+    border-right: 1.5px solid var(--ink);
+    overflow-y: auto;
+    padding: 12px 10px 24px;
+  }
+  .sb-head {
+    font-size: 9.5px;
+    letter-spacing: 0.16em;
+    color: var(--ink-60);
+    margin: 14px 4px 6px;
+    text-transform: uppercase;
+  }
+  .sb-head:first-child { margin-top: 0; }
+  .sb-item {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    width: 100%;
+    text-align: left;
+    font: inherit;
+    font-size: 11.5px;
+    color: var(--ink);
+    background: transparent;
+    border: 1px solid var(--ink-38);
+    padding: 6px 8px;
+    margin: 0 0 5px;
+    cursor: pointer;
+  }
+  .sb-item:hover { border-color: var(--ink); }
+  .sb-item.active { background: var(--ink); color: var(--paper); border-color: var(--ink); }
+  .sb-item .code {
+    font-size: 9.5px;
+    border: 1px solid currentColor;
+    padding: 0 3px;
+    flex: none;
+  }
+  .sb-item .nm { flex: 1; min-width: 0; }
+  .sb-item .n { font-size: 9.5px; opacity: 0.65; flex: none; }
+
+  /* ---------- stage ---------- */
+  #stage { grid-area: stage; position: relative; min-width: 0; min-height: 0; }
+  #cv { position: absolute; inset: 0; width: 100%; height: 100%; cursor: grab; display: block; }
+  #cv.dragging { cursor: grabbing; }
+  #hintbar {
+    position: absolute;
+    left: 0; right: 0; bottom: 0;
+    padding: 6px 14px;
+    font-size: 10px;
+    letter-spacing: 0.12em;
+    color: var(--ink-60);
+    text-transform: uppercase;
+    pointer-events: none;
+    background: linear-gradient(transparent, var(--paper) 65%);
+  }
+  #tip {
+    position: absolute;
+    display: none;
+    pointer-events: none;
+    background: var(--ink);
+    color: var(--paper);
+    font-size: 10.5px;
+    padding: 3px 8px;
+    max-width: 260px;
+    z-index: 5;
+    letter-spacing: 0.04em;
+  }
+  #zoomctl {
+    position: absolute; top: 12px; right: 12px;
+    display: flex; flex-direction: column; gap: 5px;
+  }
+  #zoomctl button {
+    font: inherit; width: 26px; height: 26px;
+    background: var(--paper); border: 1.5px solid var(--ink);
+    color: var(--ink); cursor: pointer; font-size: 14px; line-height: 1;
+  }
+  #zoomctl button:hover { background: var(--ink); color: var(--paper); }
+
+  /* ---------- right panel ---------- */
+  #panel {
+    grid-area: panel;
+    border-left: 1.5px solid var(--ink);
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    background: var(--paper);
+  }
+  #tabs { display: flex; border-bottom: 1.5px solid var(--ink); flex: none; }
+  #tabs button {
+    flex: 1;
+    font: inherit;
+    font-size: 10.5px;
+    letter-spacing: 0.14em;
+    padding: 9px 4px;
+    background: var(--paper);
+    color: var(--ink);
+    border: none;
+    border-right: 1px solid var(--ink-38);
+    cursor: pointer;
+    text-transform: uppercase;
+  }
+  #tabs button:last-child { border-right: none; }
+  #tabs button.active { background: var(--ink); color: var(--paper); }
+  #panel-body { overflow-y: auto; padding: 18px 20px 40px; flex: 1; }
+  #panel-body .eyebrow {
+    font-size: 9.5px;
+    letter-spacing: 0.16em;
+    color: var(--ink-60);
+    text-transform: uppercase;
+  }
+  #panel-body h1 {
+    font-size: 21px;
+    font-weight: 600;
+    margin: 4px 0 2px;
+    letter-spacing: -0.01em;
+    text-wrap: balance;
+  }
+  #panel-body .sub { font-size: 11px; color: var(--ink-60); margin-bottom: 14px; }
+  #panel-body h2 {
+    font-size: 10px;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--ink-60);
+    border-bottom: 1px solid var(--ink-38);
+    padding-bottom: 4px;
+    margin: 22px 0 10px;
+    font-weight: 500;
+  }
+  #panel-body p { margin: 0 0 12px; max-width: 46ch; }
+  #panel-body mark {
+    background: var(--ink);
+    color: var(--paper);
+    padding: 0 4px;
+  }
+  #panel-body code {
+    font-family: inherit;
+    font-size: 12px;
+    border: 1px solid var(--ink-38);
+    padding: 0 3px;
+    white-space: nowrap;
+  }
+  #panel-body pre {
+    border: 1px solid var(--ink);
+    background: var(--paper-deep);
+    padding: 10px 12px;
+    font-size: 11.5px;
+    line-height: 1.5;
+    overflow-x: auto;
+    margin: 0 0 14px;
+    white-space: pre;
+  }
+  #panel-body table { border-collapse: collapse; font-size: 12px; margin: 0 0 14px; }
+  #panel-body td, #panel-body th {
+    border: 1px solid var(--ink-38);
+    padding: 3px 9px;
+    text-align: left;
+    font-variant-numeric: tabular-nums;
+  }
+  #panel-body th { font-size: 9.5px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink-60); font-weight: 500; }
+  .flowchip {
+    display: inline-block;
+    border: 1.5px solid var(--ink);
+    padding: 2px 8px;
+    font-size: 11px;
+    margin: 0 4px 12px 0;
+  }
+  .filetag { font-size: 10.5px; color: var(--ink-60); margin: -6px 0 14px; }
+</style>
+
+<div id="app">
+  <div id="topbar">
+    <div class="stat"><div class="k">Repository</div><div class="v">pyalwin/engramdb</div></div>
+    <div class="stat"><div class="k">Engine</div><div class="v">DuckDB · 1 file</div></div>
+    <div class="stat"><div class="k">Edge types live</div><div class="v">3 — refs · defines · parent</div></div>
+    <div class="stat"><div class="k">Benchmark</div><div class="v">92.8% vs 68.2% recall</div></div>
+    <div class="stat"><div class="k">Questions</div><div class="v">183 · 35 contracts</div></div>
+    <div class="spacer"></div>
+    <div id="controls">
+      <button class="ctl" id="btn-flow">&#9654;&#65038; PAUSE THE FLOW</button>
+      <button class="ctl" id="btn-step">TRACE ONE STEP</button>
+      <button class="ctl" id="btn-reset">RESET VIEW</button>
+    </div>
+  </div>
+
+  <nav id="sidebar" aria-label="Components"></nav>
+
+  <div id="stage">
+    <canvas id="cv"></canvas>
+    <div id="zoomctl">
+      <button id="btn-zin" aria-label="Zoom in">+</button>
+      <button id="btn-zout" aria-label="Zoom out">&minus;</button>
+    </div>
+    <div id="tip" role="status"></div>
+    <div id="hintbar">&#8594; click a moving dot to inspect its data &middot; click a block for its story &middot; hover to read &middot; drag to pan &middot; scroll to zoom</div>
+  </div>
+
+  <aside id="panel">
+    <div id="tabs">
+      <button id="tab-what" class="active">What it does</button>
+      <button id="tab-built">How it's built</button>
+    </div>
+    <div id="panel-body"></div>
+  </aside>
+</div>
+
+<script>
+"use strict";
+
+/* ================================================================
+   Scene data — every block is a real module, every dot a real value
+   ================================================================ */
+
+const T = 46;              // grid unit in world px
+const iso = (gx, gy, z = 0) => ({ x: (gx - gy) * T, y: (gx + gy) * T * 0.5 - z });
+
+const NODES = {
+  txt:    { gx: -0.4, gy: 1.6, w: 1.7, d: 1.7, h: 10, code: "T", name: "Contract text" },
+  parser: { gx: 2.9,  gy: -0.4, w: 1.8, d: 1.8, h: 46, code: "P", name: "SectionParser" },
+  defs:   { gx: 2.9,  gy: 1.9, w: 1.8, d: 1.8, h: 46, code: "D", name: "DefinitionExtractor" },
+  refs:   { gx: 2.9,  gy: 4.2, w: 1.8, d: 1.8, h: 46, code: "R", name: "ReferenceLinker" },
+  asm:    { gx: 6.3,  gy: 1.9, w: 2.2, d: 2.2, h: 64, code: "A", name: "Ingest assembler" },
+  emb:    { gx: 9.4,  gy: -0.6, w: 2.0, d: 2.0, h: 88, code: "E", name: "Embedder" },
+  store:  { gx: 9.6,  gy: 3.4, w: 3.2, d: 3.2, h: 24, code: "S", name: "DuckDBStorage" },
+  qry:    { gx: 13.2, gy: -2.6, w: 1.7, d: 1.7, h: 10, code: "Q", name: "Query" },
+  hyb:    { gx: 14.0, gy: 1.6, w: 2.4, d: 2.4, h: 100, code: "H", name: "HybridRetriever" },
+  res:    { gx: 17.6, gy: 1.9, w: 1.8, d: 1.8, h: 40, code: "O", name: "RetrievalResult" },
+  ctx:    { gx: 20.3, gy: 1.9, w: 1.8, d: 1.8, h: 22, code: "C", name: "Context for the LLM" },
+  bench:  { gx: 17.4, gy: 4.6, w: 2.0, d: 2.0, h: 34, code: "B", name: "CUAD benchmark" },
+};
+
+const center = n => ({ gx: n.gx + n.w / 2, gy: n.gy + n.d / 2 });
+
+// Edges: [from, to, arrow label]. Dots ride these.
+const EDGES = [
+  { from: "txt",    to: "parser", label: "raw text" },
+  { from: "txt",    to: "defs",   label: "raw text" },
+  { from: "txt",    to: "refs",   label: "raw text" },
+  { from: "parser", to: "asm",    label: "sections" },
+  { from: "defs",   to: "asm",    label: "definitions + usages" },
+  { from: "refs",   to: "asm",    label: "reference edges" },
+  { from: "asm",    to: "emb",    label: "embed_batch(texts)" },
+  { from: "emb",    to: "store",  label: "engrams + vectors" },
+  { from: "asm",    to: "store",  label: "synapses" },
+  { from: "qry",    to: "emb",    label: "embed(query)" },
+  { from: "emb",    to: "hyb",    label: "query_embedding" },
+  { from: "hyb",    to: "store",  label: "search_similar / get_synapses" },
+  { from: "store",  to: "hyb",    label: "anchors + neighbors" },
+  { from: "hyb",    to: "res",    label: "ranked engrams" },
+  { from: "res",    to: "ctx",    label: "format_context()" },
+  { from: "bench",  to: "qry",    label: "183 questions" },
+  { from: "res",    to: "bench",  label: "recall@k" },
+];
+
+/* One dot per edge, in narrative order. `payload` is what you inspect. */
+const FLOWS = [
+  { edge: 0, label: "contract text", file: "db.py — ingest(), step 1",
+    payload: 'MUTUAL NON-DISCLOSURE AGREEMENT\n\n1.1 Definitions\n"Cause" means a material breach of\nthis Agreement.\n\n4.2 Termination\nEither party may terminate this\nAgreement for Cause with 30 days\nnotice. See Section 1.1.' },
+  { edge: 1, label: "contract text", file: "db.py — ingest(), step 2",
+    payload: '…scanning for quoted-term patterns:\n\n"Cause" means a material breach of\nthis Agreement.\n              ^^^^^\n  pattern: "X" means / shall mean …' },
+  { edge: 2, label: "contract text", file: "db.py — ingest(), step 3",
+    payload: "…scanning for cross-references:\n\n'See Section 1.1'\n'per Article III'\n'as defined in Section 4.2'" },
+  { edge: 3, label: "Section", file: "ingestion/parser.py — SectionParser.parse()",
+    payload: "Section(\n  number='4.2',\n  title='Termination',\n  level=2,\n  content='Either party may terminate\n    this Agreement for Cause with 30\n    days notice. See Section 1.1.',\n  start_pos=118, end_pos=209,\n  children=[],\n)" },
+  { edge: 4, label: "Definition + TermUsage", file: "ingestion/definitions.py — extract_with_usages()",
+    payload: "Definition(\n  term='Cause',\n  definition='a material breach of\n    this Agreement',\n  position=52,\n)\n\nTermUsage(term='Cause', position=163)\n# → later becomes a DEFINES synapse\n#   into Section 4.2" },
+  { edge: 5, label: "ReferenceEdge", file: "ingestion/references.py — extract_and_link()",
+    payload: "ReferenceEdge(\n  source_section='4.2',\n  target_section='1.1',\n  reference_text='See Section 1.1',\n  reference_type='section',\n)" },
+  { edge: 6, label: "texts batch", file: "db.py — ingest(), step 6",
+    payload: "embedder.embed_batch([\n  'Section 4.2 - Termination\\n\\n\n   Either party may terminate…',\n  '\"Cause\" means a material breach\n   of this Agreement',\n])" },
+  { edge: 7, label: "Engram (node)", file: "storage/duckdb.py — insert_engrams_batch()",
+    payload: "Engram(\n  id='7f2c91ae-…',\n  engram_type=EngramType.SECTION,\n  content='Section 4.2 - Termination\n    \\n\\nEither party may terminate…',\n  embedding=[0.0213, -0.1131, 0.0868,\n             …1536 floats],\n  metadata={\n    'document_id': 'nda_001',\n    'section_number': '4.2',\n    'title': 'Termination',\n    'level': 2,\n  },\n)" },
+  { edge: 8, label: "Synapse (edge)", file: "storage/duckdb.py — insert_synapses_batch()",
+    payload: "Synapse(  # from the ReferenceEdge\n  source_id='7f2c91ae-…',  # 4.2\n  target_id='c04d17b2-…',  # 1.1\n  synapse_type=REFERENCES,\n  metadata={'reference_text':\n            'See Section 1.1'},\n)\n\nSynapse(  # from the TermUsage\n  source_id='9a51d0ee-…',  # \"Cause\"\n  target_id='7f2c91ae-…',  # 4.2\n  synapse_type=DEFINES,\n  metadata={'term': 'Cause'},\n)" },
+  { edge: 9, label: "query string", file: "db.py — query()",
+    payload: "db.query(\n  'Under what conditions can we\n   terminate?',\n  top_k_anchors=3,\n  max_hops=2,\n  max_context_items=10,\n)" },
+  { edge: 10, label: "query_embedding", file: "retrieval/hybrid.py — _retrieve_core()",
+    payload: "query_embedding = embedder.embed(\n  'Under what conditions can we\n   terminate?')\n\n# [0.0141, -0.0925, 0.0034,\n#  …1536 floats]" },
+  { edge: 11, label: "storage calls", file: "retrieval/hybrid.py — _traverse_from_anchor()",
+    payload: "storage.search_similar(\n  query_embedding, top_k=3)\n\n# then, per anchor, per hop:\nstorage.get_synapses_from('7f2c…')\nstorage.get_synapses_to('7f2c…')\n\n# plus: query mentions 'Section N'?\n# inject find_by_section_number(N)\n# as an extra anchor" },
+  { edge: 12, label: "anchors + discovered", file: "retrieval/hybrid.py — _retrieve_core()",
+    payload: "anchors = [\n  (Engram '4.2 Termination', sim=0.81),\n  (Engram '5.1 General',     sim=0.63),\n]\n\ndiscovered = {  # via graph walk\n  '1.1 Definitions':\n      (hop=1, edge_w=1.0),  # REFERENCES\n  '\"Cause\" means…':\n      (hop=1, edge_w=0.9),  # DEFINES\n}" },
+  { edge: 13, label: "blended scores", file: "retrieval/hybrid.py — scoring + reservation",
+    payload: "score = 0.5·semantic + 0.5·structural\nstructural = edge_w · 0.75^(hop-1)\n\n'4.2 Termination'\n  0.5·0.81 + 0.5·1.00 = 0.905  anchor\n'1.1 Definitions'\n  0.5·0.44 + 0.5·1.00 = 0.720  hop 1\n'\"Cause\" means…'\n  0.5·0.38 + 0.5·0.90 = 0.640  hop 1\n\n# 4 slots reserved for traversed\n# nodes; REFERENCES/DEFINES tier\n# outranks PARENT_OF inside them" },
+  { edge: 14, label: "context string", file: "retrieval/hybrid.py — format_context()",
+    payload: "[1] Section 4.2 - Termination:\nEither party may terminate this\nAgreement for Cause with 30 days\nnotice. See Section 1.1.\n\n[2] Section 1.1 - Definitions:\n…\n\n[3] (definition):\n\"Cause\" means a material breach of\nthis Agreement" },
+  { edge: 15, label: "benchmark question", file: "benchmarks/datasets/multihop_generator.py",
+    payload: "{\n  'question': 'What does Section 6\n     require regarding Section 3?',\n  'gold_sections': ['6', '3'],\n  'hop_count': 2,\n  'type': 'cross_reference',\n}\n# 183 questions · 35 CUAD contracts" },
+  { edge: 16, label: "recall@k", file: "benchmarks/evaluation/metrics.py",
+    payload: "recall = |retrieved ∩ gold| / |gold|\n\noverall   hybrid 92.8%  vector 68.2%\n2-hop     hybrid 97.6%  vector 66.8%\n3-hop     hybrid 86.5%  vector 70.0%\n\ncross-ref        +34.0pp\ntermination      +21.9pp\ndefinition usage +10.2pp" },
+];
+
+/* dashed ground platforms grouping the clusters */
+const PLATFORMS = [
+  { gx: -1.2, gy: -1.2, w: 11.2, d: 7.6, label: "INGESTION" },
+  { gx: 12.4, gy: -3.4, w: 10.6, d: 7.4, label: "RETRIEVAL" },
+  { gx: 16.6, gy: 4.1,  w: 3.6,  d: 3.4, label: "EVALUATION" },
+];
+
+/* ================================================================
+   Right-panel copy — the story of each block
+   ================================================================ */
+
+const DOC = {
+  overview: {
+    eyebrow: "pyalwin/engramdb",
+    title: "EngramDB Atlas",
+    sub: "how a contract becomes a graph, and a question walks it",
+    what: `
+      <h2>What this is</h2>
+      <p>This repository is <mark>schema-aware hybrid retrieval</mark> for
+      multi-hop legal questions. Standard RAG retrieves chunks by vector
+      similarity and misses evidence that a contract scatters across
+      sections. EngramDB parses each contract into a graph — sections
+      become <mark>engrams</mark> (nodes), and cross-references, defined
+      terms, and the heading hierarchy become <mark>synapses</mark>
+      (edges) — with pure regex, no LLM calls during ingestion.</p>
+      <p>A query then runs in two phases: vector search finds
+      <mark>anchor</mark> nodes, and a <mark>graph walk</mark> expands 1–3
+      hops from them, so the definition of "Cause" comes along with the
+      Termination clause that uses it.</p>
+      <p>On 183 multi-hop questions over 35 CUAD contracts, that lifts
+      recall from 68.2% (vector-only) to <mark>92.8%</mark>.</p>
+      <h2>How to read it</h2>
+      <p>The left half is ingestion, the right half is a live query, the
+      platform between them is the DuckDB file both share. The
+      <mark>moving dots are data snippets</mark> — the actual values in
+      flight between modules. Click one to freeze and inspect it; click a
+      block for its story; TRACE ONE STEP walks the whole pipeline dot by
+      dot.</p>`,
+    built: `
+      <h2>Layout</h2>
+      <pre>src/engramdb/
+  core/         Engram, Synapse models
+  ingestion/    parser, definitions,
+                references
+  embeddings/   mock | openai | local
+  retrieval/    hybrid, vector, graph
+  storage/      DuckDB persistence
+  db.py         user-facing API
+
+benchmarks/
+  datasets/     CUAD loader, QA gen
+  evaluation/   runner, metrics, stats
+  baselines/    naive RAG scaffold</pre>
+      <h2>The whole loop in one line</h2>
+      <p><code>parse → extract → link → embed → store → anchor → traverse
+      → score → context</code></p>
+      <p>Everything persists to a single DuckDB file. No vector database,
+      no GPU, no network during ingestion.</p>`,
+  },
+  txt: {
+    eyebrow: "input", title: "Contract text", sub: "one string in, a graph out",
+    what: `<p>Ingestion starts from a plain string — an NDA, an SEC
+      filing, any contract-shaped document — plus a <code>doc_id</code>.
+      The same text is handed to <mark>three extractors in parallel</mark>:
+      sections, defined terms, cross-references. Nothing is chunked by
+      token count; the document's own structure decides the boundaries.</p>`,
+    built: `<pre>with EngramDB(db_path='data/nda.duckdb',
+              embedding_backend='mock') as db:
+    db.ingest(contract_text,
+              doc_id='nda_001')</pre>
+      <p><code>src/engramdb/db.py — EngramDB.ingest()</code>, ten numbered
+      steps from parse to synapse storage.</p>`,
+  },
+  parser: {
+    eyebrow: "src/engramdb/ingestion/parser.py", title: "SectionParser", sub: "headings → hierarchy",
+    what: `<p>Finds section boundaries with <mark>ordered regex
+      patterns</mark> — <code>ARTICLE I - Title</code>,
+      <code>Section 1.2.3</code>, bare <code>4.2 Termination</code>,
+      ALL-CAPS named headings — and nests them into a tree by numbering
+      depth: Article I → 1.1 → 1.1.1.</p>
+      <p>Every section keeps its <mark>character span</mark>
+      (<code>start_pos…end_pos</code>), which later lets the assembler
+      answer "which section is character 163 inside?" when linking term
+      usages.</p>`,
+    built: `<pre>@dataclass
+class Section:
+    number:  '4.2'
+    title:   'Termination'
+    content: str
+    level:   int   # 1 = top
+    children: list[Section]
+    start_pos, end_pos: int</pre>
+      <p>Pattern order matters — more specific first. Roman numerals get
+      their own sub-pattern. <code>flatten()</code> turns the tree back
+      into the flat list the assembler iterates.</p>`,
+  },
+  defs: {
+    eyebrow: "src/engramdb/ingestion/definitions.py", title: "DefinitionExtractor", sub: "quoted terms and where they're used",
+    what: `<p>Matches the legal-drafting convention
+      <code>"Cause" means …</code> / <code>shall mean …</code> and
+      captures the definition text. Then
+      <mark>extract_with_usages()</mark> re-scans the document for every
+      place each defined term is used, recording character positions.</p>
+      <p>Those usage positions are what turn definitions from isolated
+      nodes into <mark>connected graph paths</mark> — each usage becomes a
+      DEFINES synapse into the section that contains it.</p>`,
+    built: `<pre>Definition(term, definition, position)
+TermUsage(term, position)
+
+extract_with_usages(text) ->
+  (list[Definition],
+   dict[term, list[TermUsage]])</pre>
+      <p>Definition text is clipped at sentence/paragraph boundaries by
+      <code>_extract_definition_text()</code> so a definition doesn't
+      swallow the rest of the page.</p>`,
+  },
+  refs: {
+    eyebrow: "src/engramdb/ingestion/references.py", title: "ReferenceLinker", sub: "'See Section 4.2' becomes an edge",
+    what: `<p>Extracts explicit cross-references — <code>See Section
+      4.2</code>, <code>per Article III</code>, <code>as defined in
+      Section 1.1</code> — and <mark>resolves</mark> each to the section
+      it names (Roman numerals converted, dotted numbers matched).
+      The section containing the mention becomes the edge's source; the
+      named section its target.</p>
+      <p>These are the highest-value edges in the whole system: at query
+      time REFERENCES carries weight <mark>1.0</mark>, the strongest
+      structural signal there is.</p>`,
+    built: `<pre>ReferenceEdge(
+  source_section='4.2',
+  target_section='1.1',
+  reference_text='See Section 1.1',
+  reference_type='section')</pre>
+      <p><code>extract_and_link(text, sections)</code> does extract →
+      resolve → edge creation in one pass;
+      <code>_find_containing_section()</code> assigns sources by character
+      span.</p>`,
+  },
+  asm: {
+    eyebrow: "src/engramdb/db.py — ingest()", title: "Ingest assembler", sub: "ten steps from text to graph",
+    what: `<p>The orchestrator. Takes the three extractors' outputs and
+      builds the actual graph: an <mark>engram per section</mark> (content
+      prefixed with its heading so no vector embeds an empty string), an
+      <mark>engram per definition</mark>, then three families of synapses
+      — REFERENCES from resolved cross-references, <mark>PARENT_OF</mark>
+      down the heading hierarchy, and <mark>DEFINES</mark> from each
+      definition into every section that uses its term.</p>
+      <p>A quality tie-break keeps duplicate section numbers honest: when
+      two parses claim "4.2", the one with the longer body wins the ID
+      map.</p>`,
+    built: `<pre>steps 1-3  parse / extract / link
+step  4    section engrams
+step  5    definition engrams
+step  6    embed_batch(all contents)
+step  7    insert_engrams_batch
+step  8    REFERENCES synapses
+step  9    PARENT_OF hierarchy
+step  9.5  DEFINES via usage spans
+step 10    insert_synapses_batch</pre>
+      <p>Section-to-engram identity lives in <code>section_id_map</code>,
+      keyed by both number and title, with body-length quality
+      scoring.</p>`,
+  },
+  emb: {
+    eyebrow: "src/engramdb/embeddings/embedder.py", title: "Embedder", sub: "three backends, one interface",
+    what: `<p>Turns text into vectors for both sides of the system — every
+      engram at ingestion, every query at retrieval. Three interchangeable
+      backends: <mark>mock</mark> (deterministic hash-based
+      pseudo-vectors, so tests run offline), <mark>openai</mark>
+      (API embeddings), and <mark>local</mark>
+      (sentence-transformers, <code>intfloat/e5-base-v2</code>).</p>
+      <p>The mock backend is why the whole pipeline — and this diagram's
+      example — runs with zero network calls.</p>`,
+    built: `<pre>class Embedder(ABC):
+    embed(text) -> list[float]
+    embed_batch(texts)
+    dimension  # 1536 / 768
+
+create_embedder(backend='mock')</pre>
+      <p>Chosen once in <code>EngramDB.__init__</code>; storage never
+      knows which backend produced a vector.</p>`,
+  },
+  store: {
+    eyebrow: "src/engramdb/storage/duckdb.py", title: "DuckDBStorage", sub: "nodes, edges, and vectors in one file",
+    what: `<p>The shared platform both pipelines stand on. Two tables —
+      <mark>engrams</mark> (id, content, type, embedding, metadata JSON)
+      and <mark>synapses</mark> (source, target, type, metadata) — in a
+      single DuckDB file, or in memory.</p>
+      <p>It answers three kinds of question: <mark>similarity</mark>
+      (<code>search_similar</code>, cosine over stored vectors),
+      <mark>adjacency</mark> (<code>get_synapses_from / _to</code>, the
+      primitive the graph walk is built on), and <mark>identity</mark>
+      (<code>find_by_section_number</code>, used to inject anchors when a
+      query says "Section 6").</p>`,
+    built: `<pre>CREATE TABLE engrams (
+  id VARCHAR PRIMARY KEY,
+  content TEXT,
+  engram_type VARCHAR,
+  embedding FLOAT[],
+  metadata JSON, …)
+
+CREATE TABLE synapses (
+  source_id, target_id,
+  synapse_type, metadata JSON, …)</pre>
+      <p>Batch inserts for ingestion; <code>get_subgraph</code> and
+      <code>get_connected</code> exist for deeper graph queries.</p>`,
+  },
+  qry: {
+    eyebrow: "src/engramdb/db.py — query()", title: "Query", sub: "one question, three retrieval modes",
+    what: `<p>The user-facing entry point. <code>db.query()</code> runs
+      the full hybrid pipeline; <code>query_vector_only()</code> is the
+      standard-RAG baseline, and <code>query_graph_only()</code> the
+      ablation that ranks purely by structure. The three share anchors and
+      storage, which is what makes the benchmark a fair fight.</p>`,
+    built: `<pre>db.query(question,
+  top_k_anchors=3,
+  max_hops=2,
+  max_context_items=10,
+  min_traversed_items=0)</pre>
+      <p>All three modes return the same <code>RetrievalResult</code>
+      shape.</p>`,
+  },
+  hyb: {
+    eyebrow: "src/engramdb/retrieval/hybrid.py", title: "HybridRetriever", sub: "anchor → traverse → score → reserve",
+    what: `<p>The tallest structure here because it's the thesis of the
+      repo. Four moves: <mark>anchor</mark> — vector search returns the
+      top-K semantically similar engrams (plus injected anchors when the
+      query names "Section N", since embeddings can't match section
+      numbers); <mark>traverse</mark> — a breadth-first walk up to
+      <code>max_hops</code> from every anchor, both edge directions,
+      keeping each node's best (hop, edge-weight) signal;
+      <mark>score</mark> — every candidate gets
+      <code>0.5·semantic + 0.5·structural</code>, where structural decays
+      0.75 per hop and by edge type; <mark>reserve</mark> — a few context
+      slots are held for traversed nodes so high-similarity anchors can't
+      crowd out the evidence the graph found.</p>
+      <p>Within reserved slots, REFERENCES/DEFINES arrivals outrank
+      PARENT_OF ones — the fix for the "traversed but ranked out" failure
+      mode.</p>`,
+    built: `<pre>edge_type_weights = {
+  REFERENCES: 1.0,
+  DEFINES:    0.9,
+  RELATED_TO: 0.75,
+  PARENT_OF:  0.55, CHILD_OF: 0.55 }
+hop_decay       = 0.75
+semantic_weight = 0.5</pre>
+      <p><code>_retrieve_core()</code> returns full intermediates, so
+      <code>retrieve_with_trace()</code> can expose anchors, traversal
+      paths, and the reasoning chain for evaluation. Sparse graphs get a
+      semantic <mark>backfill</mark> so hybrid never returns less than
+      vector-only would.</p>`,
+  },
+  res: {
+    eyebrow: "src/engramdb/retrieval/hybrid.py", title: "RetrievalResult", sub: "what a query hands back",
+    what: `<p>The ranked evidence set: engrams in score order, with the
+      bookkeeping that makes results explainable — which IDs were
+      <mark>anchors</mark>, which were <mark>traversed</mark> (found only
+      by the graph), and every blended score. The benchmark reads exactly
+      these fields to compute recall.</p>`,
+    built: `<pre>RetrievalResult(
+  engrams:       list[Engram],
+  anchor_ids:    list[str],
+  traversed_ids: list[str],
+  scores:        dict[id, float])</pre>
+      <p><code>RetrievalTrace</code> adds the query embedding and
+      per-anchor traversal paths for debugging.</p>`,
+  },
+  ctx: {
+    eyebrow: "src/engramdb/retrieval/hybrid.py — format_context()", title: "Context for the LLM", sub: "the string that leaves the system",
+    what: `<p>The final product: retrieved engrams formatted as a numbered
+      context block — <code>[1] Section 4.2 - Termination: …</code> — with
+      section numbers and titles as metadata headers, ready to paste ahead
+      of the question in an LLM prompt. If retrieval got the graph right,
+      the definition, the clause, and the exception all arrive
+      together.</p>`,
+    built: `<pre>db.get_context_string(result,
+    include_metadata=True)
+
+[1] Section 4.2 - Termination:
+    …
+[2] Section 1.1 - Definitions:
+    …</pre>`,
+  },
+  bench: {
+    eyebrow: "benchmarks/", title: "CUAD benchmark", sub: "the measuring instrument",
+    what: `<p>The proof loop. 35 CUAD contracts (real SEC filings) are
+      ingested, a generator derives <mark>183 multi-hop questions</mark>
+      from the graph itself — cross-reference chains, termination chains,
+      definition usage — each labeled with the gold sections needed to
+      answer. Hybrid and vector-only run the same questions against the
+      same store; recall over gold sections is the score.</p>
+      <table>
+        <tr><th>type</th><th>hybrid</th><th>vector</th></tr>
+        <tr><td>cross-reference</td><td>99.4%</td><td>65.4%</td></tr>
+        <tr><td>termination chain</td><td>100%</td><td>78.1%</td></tr>
+        <tr><td>definition usage</td><td>80.5%</td><td>70.3%</td></tr>
+      </table>`,
+    built: `<pre>datasets/cuad_loader.py
+datasets/multihop_generator.py
+datasets/synthetic.py
+evaluation/benchmark.py
+evaluation/metrics.py
+evaluation/statistics.py
+baselines/naive_rag.py  # scaffold</pre>
+      <p><code>run_full_eval.py</code> adds ablations (graph-only) and
+      significance stats; <code>analyze_hybrid_failures.py</code>
+      classifies the 13 remaining failures.</p>`,
+  },
+};
+
+const SIDEBAR = [
+  { head: "The pipeline", items: ["txt", "parser", "defs", "refs", "asm"] },
+  { head: "Shared organs", items: ["emb", "store"] },
+  { head: "Retrieval", items: ["qry", "hyb"] },
+  { head: "What comes out", items: ["res", "ctx"] },
+  { head: "Evaluation", items: ["bench"] },
+];
+
+/* ================================================================
+   Canvas engine
+   ================================================================ */
+
+const cv = document.getElementById("cv");
+const ctx2d = cv.getContext("2d");
+const stage = document.getElementById("stage");
+const tip = document.getElementById("tip");
+
+const INK = "#21200f";
+const cam = { x: 0, y: 0, k: 1 };
+let paused = matchMedia("(prefers-reduced-motion: reduce)").matches;
+let hover = null;          // {kind:'node'|'dot', id/idx}
+let selected = { kind: "overview" };
+let traceIdx = -1;
+let clock = 0, lastTs = 0;
+
+// precompute edge world paths + lengths
+for (const e of EDGES) {
+  const a = center(NODES[e.from]), b = center(NODES[e.to]);
+  e.p0 = iso(a.gx, a.gy); e.p1 = iso(b.gx, b.gy);
+  e.len = Math.hypot(e.p1.x - e.p0.x, e.p1.y - e.p0.y);
+}
+FLOWS.forEach((f, i) => {
+  f.offset = (i * 0.61803) % 1;          // golden-ratio stagger
+  f.speed = 42 / EDGES[f.edge].len;      // ~42 world-px / s
+  f.t = f.offset;
+});
+
+function nodeOutline(n) {
+  // silhouette of the iso box, world coords
+  const { gx, gy, w, d, h } = n;
+  return [
+    iso(gx, gy, h), iso(gx + w, gy, h), iso(gx + w, gy, 0),
+    iso(gx + w, gy + d, 0), iso(gx, gy + d, 0), iso(gx, gy + d, h),
+  ];
+}
+
+function fitView() {
+  let minX = 1e9, minY = 1e9, maxX = -1e9, maxY = -1e9;
+  const eat = p => { minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x); minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y); };
+  for (const id in NODES) nodeOutline(NODES[id]).forEach(eat);
+  for (const pl of PLATFORMS) {
+    eat(iso(pl.gx, pl.gy)); eat(iso(pl.gx + pl.w, pl.gy));
+    eat(iso(pl.gx + pl.w, pl.gy + pl.d)); eat(iso(pl.gx, pl.gy + pl.d));
+  }
+  const cw = cv.clientWidth, ch = cv.clientHeight;
+  const k = Math.min(cw / (maxX - minX + 90), ch / (maxY - minY + 110), 1.35);
+  cam.k = k;
+  cam.x = (cw - (maxX + minX) * k) / 2;
+  cam.y = (ch - (maxY + minY) * k) / 2 - 8;
+}
+
+function resize() {
+  const dpr = window.devicePixelRatio || 1;
+  cv.width = Math.round(cv.clientWidth * dpr);
+  cv.height = Math.round(cv.clientHeight * dpr);
+  ctx2d.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+new ResizeObserver(() => { resize(); fitView(); }).observe(stage);
+
+/* ---------- drawing helpers ---------- */
+
+function poly(pts, close = true) {
+  ctx2d.beginPath();
+  ctx2d.moveTo(pts[0].x, pts[0].y);
+  for (let i = 1; i < pts.length; i++) ctx2d.lineTo(pts[i].x, pts[i].y);
+  if (close) ctx2d.closePath();
+}
+
+function hatch(pts, spacing, slope) {
+  ctx2d.save();
+  poly(pts); ctx2d.clip();
+  let minX = 1e9, minY = 1e9, maxX = -1e9, maxY = -1e9;
+  for (const p of pts) { minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x); minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y); }
+  ctx2d.beginPath();
+  const span = (maxY - minY) + Math.abs(slope) * (maxX - minX);
+  for (let c = minY - Math.max(0, slope) * (maxX - minX); c < minY + span; c += spacing) {
+    ctx2d.moveTo(minX, c);
+    ctx2d.lineTo(maxX, c + slope * (maxX - minX));
+  }
+  ctx2d.lineWidth = 0.7;
+  ctx2d.strokeStyle = "rgba(33,32,15,0.5)";
+  ctx2d.stroke();
+  ctx2d.restore();
+}
+
+function drawBlock(id) {
+  const n = NODES[id];
+  const { gx, gy, w, d, h } = n;
+  const t00 = iso(gx, gy, h), t10 = iso(gx + w, gy, h), t11 = iso(gx + w, gy + d, h), t01 = iso(gx, gy + d, h);
+  const b10 = iso(gx + w, gy, 0), b11 = iso(gx + w, gy + d, 0), b01 = iso(gx, gy + d, 0);
+  const top = [t00, t10, t11, t01];
+  const right = [t10, b10, b11, t11];
+  const left = [t01, t11, b11, b01];
+  const isSel = selected.kind === "node" && selected.id === id;
+  const isHov = hover && hover.kind === "node" && hover.id === id;
+
+  ctx2d.fillStyle = "#d6cfa4";
+  poly(top); ctx2d.fill();
+  poly(right); ctx2d.fill();
+  poly(left); ctx2d.fill();
+
+  if (isSel) {
+    ctx2d.fillStyle = "rgba(33,32,15,0.14)";
+    poly(top); ctx2d.fill(); poly(right); ctx2d.fill(); poly(left); ctx2d.fill();
+  }
+  if (h > 12) {
+    hatch(right, 4.2, 0.5);
+    hatch(left, 4.2, -0.5);
+    hatch(top, 7.5, 0.5);
+  } else {
+    hatch(top, 9, 0.5);
+  }
+
+  ctx2d.strokeStyle = INK;
+  ctx2d.lineWidth = (isSel || isHov) ? 2 : 1.15;
+  ctx2d.lineJoin = "round";
+  poly(nodeOutline(n)); ctx2d.stroke();
+  // inner edges
+  ctx2d.lineWidth = (isSel || isHov) ? 1.4 : 0.9;
+  ctx2d.beginPath();
+  ctx2d.moveTo(t01.x, t01.y); ctx2d.lineTo(t11.x, t11.y);
+  ctx2d.moveTo(t10.x, t10.y); ctx2d.lineTo(t11.x, t11.y);
+  ctx2d.moveTo(t11.x, t11.y); ctx2d.lineTo(b11.x, b11.y);
+  ctx2d.stroke();
+
+  // letter chip on top face
+  const cx = (t00.x + t11.x) / 2, cy = (t00.y + t11.y) / 2;
+  const r = 8.5;
+  ctx2d.fillStyle = isSel ? INK : "#d6cfa4";
+  ctx2d.fillRect(cx - r, cy - r, r * 2, r * 2);
+  ctx2d.strokeStyle = INK; ctx2d.lineWidth = 1;
+  ctx2d.strokeRect(cx - r, cy - r, r * 2, r * 2);
+  ctx2d.fillStyle = isSel ? "#d6cfa4" : INK;
+  ctx2d.font = "600 10px " + FONT;
+  ctx2d.textAlign = "center"; ctx2d.textBaseline = "middle";
+  ctx2d.fillText(n.code, cx, cy + 0.5);
+}
+
+const FONT = 'ui-monospace, "SF Mono", Menlo, Consolas, monospace';
+
+function drawPlatform(pl) {
+  const pts = [iso(pl.gx, pl.gy), iso(pl.gx + pl.w, pl.gy), iso(pl.gx + pl.w, pl.gy + pl.d), iso(pl.gx, pl.gy + pl.d)];
+  ctx2d.setLineDash([5, 5]);
+  ctx2d.strokeStyle = "rgba(33,32,15,0.45)";
+  ctx2d.lineWidth = 1;
+  poly(pts); ctx2d.stroke();
+  ctx2d.setLineDash([]);
+  const p = iso(pl.gx + pl.w, pl.gy + pl.d);
+  ctx2d.fillStyle = "rgba(33,32,15,0.55)";
+  ctx2d.font = "9px " + FONT;
+  ctx2d.textAlign = "center"; ctx2d.textBaseline = "top";
+  ctx2d.fillText(pl.label, p.x, p.y + 5);
+}
+
+function drawGrid() {
+  ctx2d.strokeStyle = "rgba(33,32,15,0.09)";
+  ctx2d.lineWidth = 0.7;
+  ctx2d.beginPath();
+  for (let gx = -4; gx <= 26; gx += 2) {
+    const a = iso(gx, -6), b = iso(gx, 10);
+    ctx2d.moveTo(a.x, a.y); ctx2d.lineTo(b.x, b.y);
+  }
+  for (let gy = -6; gy <= 10; gy += 2) {
+    const a = iso(-4, gy), b = iso(26, gy);
+    ctx2d.moveTo(a.x, a.y); ctx2d.lineTo(b.x, b.y);
+  }
+  ctx2d.stroke();
+}
+
+function edgeTrim(e) {
+  // trim endpoints ~26px so lines meet block silhouettes, not centers
+  const dx = e.p1.x - e.p0.x, dy = e.p1.y - e.p0.y;
+  const t0 = Math.min(30 / e.len, 0.35), t1 = 1 - Math.min(34 / e.len, 0.35);
+  return {
+    a: { x: e.p0.x + dx * t0, y: e.p0.y + dy * t0 },
+    b: { x: e.p0.x + dx * t1, y: e.p0.y + dy * t1 },
+  };
+}
+
+function drawEdge(e, emphasized) {
+  const { a, b } = edgeTrim(e);
+  ctx2d.strokeStyle = emphasized ? INK : "rgba(33,32,15,0.75)";
+  ctx2d.lineWidth = emphasized ? 2 : 1.1;
+  ctx2d.beginPath(); ctx2d.moveTo(a.x, a.y); ctx2d.lineTo(b.x, b.y); ctx2d.stroke();
+  // arrowhead
+  const ang = Math.atan2(b.y - a.y, b.x - a.x);
+  const L = emphasized ? 9 : 7;
+  ctx2d.fillStyle = ctx2d.strokeStyle;
+  ctx2d.beginPath();
+  ctx2d.moveTo(b.x, b.y);
+  ctx2d.lineTo(b.x - L * Math.cos(ang - 0.42), b.y - L * Math.sin(ang - 0.42));
+  ctx2d.lineTo(b.x - L * Math.cos(ang + 0.42), b.y - L * Math.sin(ang + 0.42));
+  ctx2d.closePath(); ctx2d.fill();
+}
+
+function dotPos(f) {
+  const e = EDGES[f.edge];
+  const { a, b } = edgeTrim(e);
+  return { x: a.x + (b.x - a.x) * f.t, y: a.y + (b.y - a.y) * f.t };
+}
+
+function drawDot(f, idx) {
+  const p = dotPos(f);
+  const isSel = selected.kind === "dot" && selected.idx === idx;
+  const isHov = hover && hover.kind === "dot" && hover.idx === idx;
+  const r = isSel ? 7 : (isHov ? 6 : 4.6);
+  ctx2d.save();
+  ctx2d.translate(p.x, p.y);
+  ctx2d.rotate(Math.PI / 4);
+  ctx2d.fillStyle = INK;
+  ctx2d.fillRect(-r / 1.35, -r / 1.35, r * 1.48, r * 1.48);
+  if (isSel || isHov) {
+    ctx2d.strokeStyle = INK;
+    ctx2d.lineWidth = 1;
+    ctx2d.strokeRect(-r / 1.35 - 3, -r / 1.35 - 3, r * 1.48 + 6, r * 1.48 + 6);
+  }
+  ctx2d.restore();
+}
+
+function render() {
+  const cw = cv.clientWidth, ch = cv.clientHeight;
+  ctx2d.save();
+  ctx2d.clearRect(0, 0, cw, ch);
+  ctx2d.fillStyle = "#d6cfa4";
+  ctx2d.fillRect(0, 0, cw, ch);
+  ctx2d.translate(cam.x, cam.y);
+  ctx2d.scale(cam.k, cam.k);
+
+  drawGrid();
+  PLATFORMS.forEach(drawPlatform);
+
+  const selEdge = selected.kind === "dot" ? FLOWS[selected.idx].edge : -1;
+  EDGES.forEach((e, i) => drawEdge(e, i === selEdge));
+
+  Object.keys(NODES)
+    .sort((a, b) => (NODES[a].gx + NODES[a].gy) - (NODES[b].gx + NODES[b].gy))
+    .forEach(drawBlock);
+
+  FLOWS.forEach(drawDot);
+  ctx2d.restore();
+}
+
+/* ---------- animation ---------- */
+function frame(ts) {
+  const dt = Math.min((ts - lastTs) / 1000, 0.1); lastTs = ts;
+  if (!paused) {
+    for (const f of FLOWS) { f.t += f.speed * dt; if (f.t > 1) f.t -= 1; }
+  }
+  render();
+  requestAnimationFrame(frame);
+}
+
+/* ---------- interaction ---------- */
+const toWorld = (mx, my) => ({ x: (mx - cam.x) / cam.k, y: (my - cam.y) / cam.k });
+
+function pick(mx, my) {
+  const w = toWorld(mx, my);
+  for (let i = 0; i < FLOWS.length; i++) {
+    const p = dotPos(FLOWS[i]);
+    if (Math.hypot(p.x - w.x, p.y - w.y) < 9 / Math.min(cam.k, 1)) return { kind: "dot", idx: i };
+  }
+  const ids = Object.keys(NODES).sort((a, b) => (NODES[b].gx + NODES[b].gy) - (NODES[a].gx + NODES[a].gy));
+  for (const id of ids) {
+    const pts = nodeOutline(NODES[id]);
+    let inside = false;
+    for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+      if ((pts[i].y > w.y) !== (pts[j].y > w.y) &&
+          w.x < (pts[j].x - pts[i].x) * (w.y - pts[i].y) / (pts[j].y - pts[i].y) + pts[i].x) inside = !inside;
+    }
+    if (inside) return { kind: "node", id };
+  }
+  return null;
+}
+
+let drag = null;
+cv.addEventListener("pointerdown", e => {
+  drag = { x: e.clientX, y: e.clientY, cx: cam.x, cy: cam.y, moved: false };
+  cv.setPointerCapture(e.pointerId);
+  cv.classList.add("dragging");
+});
+cv.addEventListener("pointermove", e => {
+  const rect = cv.getBoundingClientRect();
+  if (drag) {
+    const dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+    if (Math.abs(dx) + Math.abs(dy) > 4) drag.moved = true;
+    cam.x = drag.cx + dx; cam.y = drag.cy + dy;
+    tip.style.display = "none";
+    return;
+  }
+  const mx = e.clientX - rect.left, my = e.clientY - rect.top;
+  hover = pick(mx, my);
+  cv.style.cursor = hover ? "pointer" : "grab";
+  if (hover) {
+    tip.style.display = "block";
+    tip.textContent = hover.kind === "node"
+      ? NODES[hover.id].name
+      : "◆ " + FLOWS[hover.idx].label + " — click to inspect";
+    tip.style.left = Math.min(mx + 14, rect.width - 200) + "px";
+    tip.style.top = (my - 26) + "px";
+  } else tip.style.display = "none";
+});
+cv.addEventListener("pointerup", e => {
+  cv.classList.remove("dragging");
+  const wasDrag = drag && drag.moved; drag = null;
+  if (wasDrag) return;
+  const rect = cv.getBoundingClientRect();
+  const hit = pick(e.clientX - rect.left, e.clientY - rect.top);
+  if (!hit) { select({ kind: "overview" }); return; }
+  if (hit.kind === "dot") { paused = true; syncFlowBtn(); }
+  select(hit);
+});
+cv.addEventListener("wheel", e => {
+  e.preventDefault();
+  const rect = cv.getBoundingClientRect();
+  const mx = e.clientX - rect.left, my = e.clientY - rect.top;
+  const k2 = Math.min(3, Math.max(0.3, cam.k * Math.exp(-e.deltaY * 0.0014)));
+  cam.x = mx - (mx - cam.x) * (k2 / cam.k);
+  cam.y = my - (my - cam.y) * (k2 / cam.k);
+  cam.k = k2;
+}, { passive: false });
+
+/* ---------- panel + sidebar rendering ---------- */
+const panelBody = document.getElementById("panel-body");
+const tabWhat = document.getElementById("tab-what");
+const tabBuilt = document.getElementById("tab-built");
+let tab = "what";
+
+function esc(s) {
+  const d = document.createElement("div");
+  d.textContent = s;
+  return d.innerHTML;
+}
+
+function renderPanel() {
+  if (selected.kind === "dot") {
+    const f = FLOWS[selected.idx];
+    const e = EDGES[f.edge];
+    panelBody.innerHTML =
+      '<div class="eyebrow">data snippet in flight</div>' +
+      "<h1>" + esc(f.label) + "</h1>" +
+      '<div class="sub">' + esc(NODES[e.from].name) + " → " + esc(NODES[e.to].name) + "</div>" +
+      '<span class="flowchip">' + esc(e.label) + "</span>" +
+      "<h2>The value on the wire</h2><pre>" + esc(f.payload) + "</pre>" +
+      "<h2>Where in the code</h2><p><code>" + esc(f.file) + "</code></p>" +
+      "<p>Dot " + (selected.idx + 1) + " of " + FLOWS.length +
+      " — TRACE ONE STEP walks them in pipeline order.</p>";
+    tabWhat.classList.add("active"); tabBuilt.classList.remove("active");
+    return;
+  }
+  const doc = selected.kind === "node" ? DOC[selected.id] : DOC.overview;
+  panelBody.innerHTML =
+    '<div class="eyebrow">' + doc.eyebrow + "</div>" +
+    "<h1>" + doc.title + "</h1>" +
+    '<div class="sub">' + doc.sub + "</div>" +
+    (tab === "what" ? doc.what : doc.built);
+  tabWhat.classList.toggle("active", tab === "what");
+  tabBuilt.classList.toggle("active", tab === "built");
+}
+
+const sidebar = document.getElementById("sidebar");
+function renderSidebar() {
+  sidebar.innerHTML = "";
+  for (const grp of SIDEBAR) {
+    const h = document.createElement("div");
+    h.className = "sb-head"; h.textContent = grp.head;
+    sidebar.appendChild(h);
+    for (const id of grp.items) {
+      const b = document.createElement("button");
+      b.className = "sb-item" + (selected.kind === "node" && selected.id === id ? " active" : "");
+      const dots = FLOWS.filter(f => EDGES[f.edge].from === id || EDGES[f.edge].to === id).length;
+      b.innerHTML = '<span class="code">' + NODES[id].code + '</span><span class="nm">' +
+        esc(NODES[id].name) + '</span><span class="n">' + dots + "</span>";
+      b.addEventListener("click", () => select({ kind: "node", id }));
+      sidebar.appendChild(b);
+    }
+  }
+}
+
+function select(sel) {
+  selected = sel;
+  renderPanel();
+  renderSidebar();
+}
+
+tabWhat.addEventListener("click", () => { tab = "what"; if (selected.kind === "dot") selected = { kind: "overview" }; renderPanel(); });
+tabBuilt.addEventListener("click", () => { tab = "built"; if (selected.kind === "dot") selected = { kind: "overview" }; renderPanel(); });
+
+/* ---------- controls ---------- */
+const btnFlow = document.getElementById("btn-flow");
+function syncFlowBtn() {
+  btnFlow.innerHTML = paused ? "▶︎ RESUME THE FLOW" : "⏸︎ PAUSE THE FLOW";
+}
+btnFlow.addEventListener("click", () => { paused = !paused; syncFlowBtn(); });
+
+document.getElementById("btn-step").addEventListener("click", () => {
+  paused = true; syncFlowBtn();
+  traceIdx = (traceIdx + 1) % FLOWS.length;
+  FLOWS[traceIdx].t = 0.55;
+  select({ kind: "dot", idx: traceIdx });
+});
+document.getElementById("btn-reset").addEventListener("click", () => { fitView(); });
+document.getElementById("btn-zin").addEventListener("click", () => { cam.k = Math.min(3, cam.k * 1.2); });
+document.getElementById("btn-zout").addEventListener("click", () => { cam.k = Math.max(0.3, cam.k / 1.2); });
+
+window.addEventListener("keydown", e => {
+  if (e.key === " " && e.target === document.body) { e.preventDefault(); paused = !paused; syncFlowBtn(); }
+});
+
+/* ---------- boot ---------- */
+resize();
+fitView();
+select({ kind: "overview" });
+syncFlowBtn();
+requestAnimationFrame(ts => { lastTs = ts; requestAnimationFrame(frame); });
+</script>
